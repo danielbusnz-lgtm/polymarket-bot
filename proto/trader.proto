@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package trader;
+
+service Trader {
+  rpc PlaceOrder (OrderRequest) returns (OrderResponse);
+}
+
+message OrderRequest {
+  string market_id  = 1;
+  string outcome    = 2;  // "YES" or "NO"
+  double price      = 3;  // 0.0 to 1.0
+  double size       = 4;  // USDC amount
+  string strategy   = 5;  // "llm", "arbitrage", "whale"
+}
+
+message OrderResponse {
+  bool   success    = 1;
+  string order_id   = 2;
+  string message    = 3;
+}
