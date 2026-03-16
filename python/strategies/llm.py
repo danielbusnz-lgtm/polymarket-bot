@@ -73,4 +73,64 @@ async def tier1_screen(candidates: list[dict]) -> list[dict]:
     picks = response.parsed_output.picks
     return [candidates[i - 1] for i in picks if 1 <= i <= len(candidates)]
 
+class ProbResult(BaseModel):
+    probability: float
+    reasoning: str
 
+
+async def call_claude(question: str, news: str) -> float:
+    response = await claude.messages.parse(
+        model="claude-opus-4-6",
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"You are analyzing a prediction market.\n\n"
+                f"Question: {question}\n\n"
+                f"Recent news:\n{news}\n\n"
+                f"Argue the case FOR YES as strongly as possible. "
+                f"Then give your honest probability estimate for YES (0.0-1.0)."
+            ),
+        }],
+        output_format=ProbResult,
+    )
+    return response.parsed_output.probability
+
+
+async def call_gpt(question: str, news: str) -> float:
+    response = await openai_client.chat.completions.parse(
+        model="gpt-4o",
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"You are analyzing a prediction market.\n\n"
+                f"Question: {question}\n\n"
+                f"Recent news:\n{news}\n\n"
+                f"Argue the case AGAINST YES (argue NO) as strongly as possible. "
+                f"Then give your honest probability estimate for YES (0.0–1.0)."
+            ),
+        }],
+        response_format=ProbResult,
+    )
+    return response.choices[0].message.parsed.probability
+
+
+async def call_gemini(question: str, news: str) -> float:
+    def _call():
+        response = gemini.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=(
+                f"You are analyzing a prediction market.\n\n"
+                f"Question: {question}\n\n"
+                f"Recent news:\n{news}\n\n"
+                f"Be skeptical of both YES and NO arguments. "
+                f"Give your honest probability estimate for YES (0.0–1.0)."
+            ),
+            config={
+                "response_mime_type": "application/json",
+                "response_json_schema": ProbResult.model_json_schema(),
+            },
+        )
+        return ProbResult.model_validate_json(response.text).probability
+    return await asyncio.to_thread(_call)
