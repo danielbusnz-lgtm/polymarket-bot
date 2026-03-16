@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Strategy
+PLAN.md
+
 # Python
 venv/
 __pycache__/
