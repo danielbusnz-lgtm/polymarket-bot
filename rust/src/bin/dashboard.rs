@@ -501,7 +501,7 @@ fn main() -> io::Result<()> {
             }
         }
 
-        if app.last_refresh.elapsed() >= Duration::from_secs(30) {
+        if app.last_refresh.elapsed() >= Duration::from_secs(2) {
             app.refresh();
         }
     }

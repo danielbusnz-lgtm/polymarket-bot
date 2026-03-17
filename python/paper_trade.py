@@ -14,7 +14,6 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
-
 def init_db() -> None:
     with get_conn() as conn:
         conn.execute("""
@@ -29,12 +28,31 @@ def init_db() -> None:
                 edge          REAL    NOT NULL,
                 avg_prob      REAL    NOT NULL,
                 disagreement  REAL    NOT NULL,
+                live          INTEGER DEFAULT 0,   -- 1 = real order placed
+                order_id      TEXT,                -- Polymarket order ID
+                fill_price    REAL,                -- actual fill price
                 resolved      INTEGER DEFAULT 0,
                 outcome       TEXT,
                 correct       INTEGER
             )
         """)
         conn.commit()
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add new columns to existing DBs without breaking them."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
+    migrations = {
+        "token_id":   "ALTER TABLE signals ADD COLUMN token_id  TEXT NOT NULL DEFAULT ''",
+        "live":       "ALTER TABLE signals ADD COLUMN live       INTEGER DEFAULT 0",
+        "order_id":   "ALTER TABLE signals ADD COLUMN order_id  TEXT",
+        "fill_price": "ALTER TABLE signals ADD COLUMN fill_price REAL",
+    }
+    for col, sql in migrations.items():
+        if col not in existing:
+            conn.execute(sql)
+    conn.commit()
 
 
 def log_signal(signal: dict) -> int:
@@ -59,6 +77,16 @@ def log_signal(signal: dict) -> int:
         return cur.lastrowid
 
 
+def mark_live(signal_id: int, order_id: str, fill_price: float | None = None) -> None:
+    """Record that a real order was placed for this signal."""
+    with get_conn() as conn:
+        conn.execute("""
+            UPDATE signals SET live = 1, order_id = ?, fill_price = ? WHERE id = ?
+        """, (order_id, fill_price, signal_id))
+        conn.commit()
+    print(f"Signal {signal_id} marked LIVE — order_id={order_id}")
+
+
 def resolve_signal(signal_id: int, outcome: str) -> None:
     with get_conn() as conn:
         row = conn.execute("SELECT direction FROM signals WHERE id = ?", (signal_id,)).fetchone()
@@ -77,6 +105,7 @@ def show_report() -> None:
     with get_conn() as conn:
         total    = conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
         open_    = conn.execute("SELECT COUNT(*) FROM signals WHERE resolved = 0").fetchone()[0]
+        live_    = conn.execute("SELECT COUNT(*) FROM signals WHERE live = 1").fetchone()[0]
         wins     = conn.execute("SELECT COUNT(*) FROM signals WHERE correct = 1").fetchone()[0]
         losses   = conn.execute("SELECT COUNT(*) FROM signals WHERE correct = 0").fetchone()[0]
         resolved = wins + losses
@@ -86,6 +115,7 @@ def show_report() -> None:
         print(f"{'='*50}")
         print(f"  Total signals : {total}")
         print(f"  Open          : {open_}")
+        print(f"  Live orders   : {live_}")
         print(f"  Resolved      : {resolved}  (wins={wins}  losses={losses})")
         if resolved > 0:
             print(f"  Win rate      : {wins/resolved:.1%}")
@@ -112,14 +142,15 @@ def show_report() -> None:
                 print(f"    {r['bucket']:10s}  n={r['n']}  win={wr:.1%}")
 
         open_rows = conn.execute("""
-            SELECT id, run_at, direction, question, price, edge
+            SELECT id, run_at, direction, question, price, edge, live, order_id
             FROM signals WHERE resolved = 0
             ORDER BY run_at DESC
         """).fetchall()
         if open_rows:
             print(f"\n  Open signals:")
             for r in open_rows:
-                print(f"    [{r['id']}] {r['direction']} | edge={r['edge']:.2f} | price={r['price']:.2f} | {r['question'][:60]}")
+                live_tag = f" [LIVE order={r['order_id']}]" if r["live"] else " [paper]"
+                print(f"    [{r['id']}] {r['direction']} | edge={r['edge']:.2f} | price={r['price']:.2f}{live_tag} | {r['question'][:55]}")
         print()
 
 
