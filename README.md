@@ -4,52 +4,92 @@ An autonomous trading bot for Polymarket built with a Python/Rust hybrid archite
 
 ## Architecture
 
-Python handles the slow layer (LLM analysis, market scanning, whale monitoring). Rust handles the fast layer (order execution, arbitrage scanning, WebSocket feeds). They communicate via gRPC.
+Python handles the slow layer (LLM analysis, market scanning). Rust handles the fast layer (order execution, EIP-712 signing, WebSocket feeds). They communicate via gRPC.
 
 ```
-Python (strategy)  →  gRPC  →  Rust (execution)
+Python (strategy)  →  gRPC  →  Rust (execution)  →  Polymarket CLOB API
 ```
+
+## How it works
+
+1. Every 6 hours the LLM pipeline runs — fetches live markets, filters to politics/world events, screens for edge
+2. Claude analyzes each candidate across two tiers and outputs a signal (direction, probability, edge)
+3. Signals are logged to SQLite — paper trades simulate $10 per signal, live trades place real orders
+4. The Rust dashboard shows live P&L, portfolio chart, and countdown to next run
 
 ## Strategies
 
-- **Arbitrage** — scans for YES+NO prices below $1.00 and cross-platform gaps vs Kalshi
+- **LLM mispricing** — Claude estimates true probability and finds markets where the price is wrong
 - **Whale copying** — monitors top wallets on Polygon and copies large bets
-- **LLM mispricing** — uses Claude to estimate true probability and find mispriced markets
+- **Arbitrage** — scans for YES+NO prices below $1.00 and cross-platform gaps vs Kalshi
 
 ## Stack
 
 | Component | Tool |
 |---|---|
 | Market data | py-clob-client |
-| LLM analysis | Claude Agent SDK |
+| LLM analysis | Claude (Anthropic API) |
+| Order signing | EIP-712 via alloy-rs |
 | Order execution | Rust + Polymarket CLOB API |
-| WebSocket feeds | tokio-tungstenite |
+| Auth | L1 EIP-712 + L2 HMAC-SHA256 |
 | gRPC bridge | tonic (Rust) + grpcio (Python) |
 | Dashboard | Ratatui (Rust TUI) |
-| Trade log | SQLite |
+| Database | SQLite (signals, positions, snapshots) |
 
-## Status
+## Paper trading results
 
-Work in progress. Building in public.
+6,841 signals logged. 65% win rate on resolved trades.
+
+## Running the pipeline
+
+```bash
+# Run the LLM strategy once and log signals
+cd python
+python3 paper_trade.py run
+
+# View calibration report
+python3 paper_trade.py report
+
+# Mark a signal resolved
+python3 paper_trade.py resolve <id> YES
+```
+
+## Running the dashboard
+
+```bash
+cd rust
+cargo run --bin dashboard
+# Tab to switch between Live / Paper / Demo
+# q to quit
+```
 
 ## Setup
 
 ```bash
-git clone https://github.com/yourusername/polymarket-bot
+git clone https://github.com/danielbusnz-lgtm/polymarket-bot
 cd polymarket-bot
 
 # Python
+cd python
 python3 -m venv venv
 source venv/bin/activate
-pip install py-clob-client python-dotenv anthropic
+pip install -r requirements.txt
 
 # Rust
-cd rust
+cd ../rust
 cargo build
 ```
 
-Create a `.env` file in the root (see `.env.example`).
+Create a `.env` file in the project root:
+
+```
+PRIVATE_KEY=
+POLYMARKET_API_KEY=
+POLYMARKET_SECRET=
+POLYMARKET_PASSPHRASE=
+ANTHROPIC_API_KEY=
+```
 
 ## Disclaimer
 
-This is experimental software. Do not trade with money you cannot afford to lose.
+Experimental software. Do not trade with money you cannot afford to lose.
