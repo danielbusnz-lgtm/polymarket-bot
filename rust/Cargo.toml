@@ -26,5 +26,10 @@ base64  = "0.22"
 anyhow  = "1"
 dotenvy = "0.15"
 
+# TUI dashboard
+ratatui   = "0.29"
+crossterm = "0.28"
+rusqlite  = { version = "0.32", features = ["bundled"] }
+
 [build-dependencies]
 tonic-build = "0.12"
