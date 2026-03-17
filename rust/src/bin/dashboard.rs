@@ -112,10 +112,10 @@ fn calc_stats(signals: &[Signal]) -> Stats {
 }
 
 /// Simulate bankroll growth using half-Kelly sizing on resolved trades.
-/// Returns Vec<(trade_number, bankroll)> for the chart.
+/// Always returns at least 2 points so the chart renders immediately.
 fn simulate_equity(signals: &[Signal]) -> Vec<(f64, f64)> {
     let mut bankroll = STARTING_BANKROLL;
-    let mut points   = vec![(0.0_f64, bankroll)];
+    let mut points: Vec<(f64, f64)> = vec![(0.0, bankroll)];
 
     let resolved: Vec<&Signal> = signals.iter().filter(|s| s.resolved).collect();
 
@@ -135,6 +135,11 @@ fn simulate_equity(signals: &[Signal]) -> Vec<(f64, f64)> {
         }
         bankroll = bankroll.max(0.0);
         points.push(((i + 1) as f64, bankroll));
+    }
+
+    // Always pad to at least 2 points so the chart renders even with no resolved trades
+    if points.len() == 1 {
+        points.push((1.0, STARTING_BANKROLL));
     }
 
     points
@@ -345,20 +350,7 @@ fn render_pnl(frame: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect
 fn render_equity_chart(frame: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
     let data = &app.equity;
 
-    if data.len() < 2 {
-        let msg = Paragraph::new("\n  No resolved trades yet — equity curve will appear here.")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(
-                Block::default()
-                    .title(" Equity Curve (half-Kelly, $1,000 start) ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)),
-            );
-        frame.render_widget(msg, area);
-        return;
-    }
-
-    let max_x = data.last().map(|p| p.0).unwrap_or(1.0);
+    let max_x = data.last().map(|p| p.0).unwrap_or(1.0).max(1.0);
     let min_y = data.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
     let max_y = data.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
 
