@@ -70,9 +70,17 @@ def fetch_candidates() -> list[dict]:
         if m.get("sportsMarketType") is not None:
             continue
 
-        m["yes_price"] = yes_price
-        m["no_price"]  = no_price
-        m["spread"]    = round(spread, 4)
+        # extract CLOB token IDs (needed for order placement)
+        raw_ids = m.get("clobTokenIds", "[]")
+        token_ids = json.loads(raw_ids) if isinstance(raw_ids, str) else raw_ids
+        if len(token_ids) < 2:
+            continue  # can't trade without both token IDs
+
+        m["yes_price"]    = yes_price
+        m["no_price"]     = no_price
+        m["spread"]       = round(spread, 4)
+        m["yes_token_id"] = token_ids[0]   # YES outcome token
+        m["no_token_id"]  = token_ids[1]   # NO outcome token
         candidates.append(m)
 
     print(f"Gamma API returned: {len(markets)} markets")
@@ -85,6 +93,7 @@ def print_candidates(candidates: list[dict]) -> None:
     print("-" * 80)
     for m in candidates:
         print(f"{m['yes_price']:>5.2f}  {m['spread']:>6.4f}  {m['question'][:65]}")
+        print(f"         YES token: {m['yes_token_id']}")
 
 
 if __name__ == "__main__":

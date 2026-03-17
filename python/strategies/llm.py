@@ -234,10 +234,13 @@ async def tier2_analyze(market: dict) -> dict | None:
     direction = "YES" if edge > 0 else "NO"
     print(f"  → TRADE {direction}  edge={edge:+.2f}")
 
+    token_id = market["yes_token_id"] if direction == "YES" else market["no_token_id"]
+
     return {
         "market_id":     market.get("conditionId", market["id"]),
         "question":      question,
         "direction":     direction,
+        "token_id":      token_id,
         "price":         yes_price if direction == "YES" else market["no_price"],
         "edge":          abs(edge),
         "avg_prob":      avg,

@@ -49,14 +49,31 @@ def is_sports(position: dict) -> bool:
 
 
 def fetch_closed_positions(address: str) -> list[dict]:
-    url    = f"https://data-api.polymarket.com/closed-positions?user={address}&limit=500"
-    r      = requests.get(url, timeout=10)
-    r.raise_for_status()
-    data   = r.json()
-    # API returns either a list or a dict with a results key
-    if isinstance(data, list):
-        return data
-    return data.get("data", data.get("results", []))
+    all_positions = []
+    offset = 0
+    limit  = 50
+
+    max_positions = 500
+
+    while len(all_positions) < max_positions:
+        url  = f"https://data-api.polymarket.com/closed-positions?user={address}&limit={limit}&offset={offset}"
+        r    = requests.get(url, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+
+        page = data if isinstance(data, list) else data.get("data", data.get("results", []))
+        if not page:
+            break
+
+        all_positions.extend(page)
+
+        if len(page) < limit:
+            break  # last page
+
+        offset += limit
+        time.sleep(0.2)
+
+    return all_positions
 
 
 def analyze_wallet(wallet: dict) -> dict | None:
@@ -65,12 +82,19 @@ def analyze_wallet(wallet: dict) -> dict | None:
 
     try:
         positions = fetch_closed_positions(address)
+    except requests.exceptions.Timeout:
+        print(f"  {username}: timed out — skip")
+        return None
     except Exception as e:
         print(f"  ERROR fetching {username}: {e}")
         return None
 
     if not positions:
         print(f"  {username}: no closed positions")
+        return None
+
+    if len(positions) < 100:
+        print(f"  {username}: only {len(positions)} trades — skip")
         return None
 
     total     = len(positions)
@@ -119,7 +143,7 @@ def main():
         for r in qualified:
             print(f"\n  {r['username']}")
             print(f"  Address:  {r['address']}")
-            print(f"  Trades:   {r['pol_trades']}")
+            print(f"  Trades:   {r['trades']}")
             print(f"  Win rate: {r['win_rate']:.1%}")
             print(f"  PnL:      ${r['total_pnl']:,.0f}")
 

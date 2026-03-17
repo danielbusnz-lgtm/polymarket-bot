@@ -24,6 +24,7 @@ def init_db() -> None:
                 market_id     TEXT    NOT NULL,
                 question      TEXT    NOT NULL,
                 direction     TEXT    NOT NULL,
+                token_id      TEXT    NOT NULL DEFAULT '',
                 price         REAL    NOT NULL,
                 edge          REAL    NOT NULL,
                 avg_prob      REAL    NOT NULL,
@@ -41,13 +42,14 @@ def log_signal(signal: dict) -> int:
     with get_conn() as conn:
         cur = conn.execute("""
             INSERT INTO signals
-                (run_at, market_id, question, direction, price, edge, avg_prob, disagreement)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (run_at, market_id, question, direction, token_id, price, edge, avg_prob, disagreement)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_at,
             signal["market_id"],
             signal["question"],
             signal["direction"],
+            signal.get("token_id", ""),
             signal["price"],
             signal["edge"],
             signal["avg_prob"],
