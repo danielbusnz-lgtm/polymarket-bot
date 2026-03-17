@@ -3,6 +3,7 @@ mod ws;
 
 use std::sync::Arc;
 
+use tokio::time::{sleep, Duration};
 use tonic::{transport::Server, Request, Response, Status};
 
 pub mod trader {
@@ -40,7 +41,7 @@ impl Trader for TraderService {
             req.outcome, token_id, price, size, req.strategy
         );
 
-        match self.executor.place_order(token_id, side, price, size).await {
+        match self.executor.place_order(token_id, side, price, size, req.tick_size, req.neg_risk).await {
             Ok(order_id) => {
                 println!("[executor] ✓ order placed: {order_id}");
                 Ok(Response::new(OrderResponse {
@@ -70,6 +71,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Missing credentials. Set PRIVATE_KEY, POLYMARKET_API_KEY, \
          POLYMARKET_SECRET, POLYMARKET_PASSPHRASE in .env"
     );
+
+    // Spawn background heartbeat loop — keeps open orders alive.
+    // Polymarket cancels all open orders if no heartbeat received within 15s.
+    let heartbeat_exec = exec.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = heartbeat_exec.send_heartbeat().await {
+                eprintln!("[heartbeat] ✗ failed: {e}");
+            } else {
+                println!("[heartbeat] ✓ ok");
+            }
+            sleep(Duration::from_secs(5)).await;
+        }
+    });
 
     let addr = "0.0.0.0:50051".parse()?;
     println!("[server] gRPC listening on {addr}");

@@ -24,17 +24,17 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0ctrader.proto\x12\x06trader\"a\n\x0cOrderRequest\x12\x11\n\tmarket_id\x18\x01 \x01(\t\x12\x0f\n\x07outcome\x18\x02 \x01(\t\x12\r\n\x05price\x18\x03 \x01(\x01\x12\x0c\n\x04size\x18\x04 \x01(\x01\x12\x10\n\x08strategy\x18\x05 \x01(\t\"C\n\rOrderResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x10\n\x08order_id\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t2C\n\x06Trader\x12\x39\n\nPlaceOrder\x12\x14.trader.OrderRequest\x1a\x15.trader.OrderResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0ctrader.proto\x12\x06trader\"\x86\x01\n\x0cOrderRequest\x12\x11\n\tmarket_id\x18\x01 \x01(\t\x12\x0f\n\x07outcome\x18\x02 \x01(\t\x12\r\n\x05price\x18\x03 \x01(\x01\x12\x0c\n\x04size\x18\x04 \x01(\x01\x12\x10\n\x08strategy\x18\x05 \x01(\t\x12\x11\n\ttick_size\x18\x06 \x01(\x01\x12\x10\n\x08neg_risk\x18\x07 \x01(\x08\"C\n\rOrderResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x10\n\x08order_id\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t2C\n\x06Trader\x12\x39\n\nPlaceOrder\x12\x14.trader.OrderRequest\x1a\x15.trader.OrderResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'trader_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_ORDERREQUEST']._serialized_start=24
-  _globals['_ORDERREQUEST']._serialized_end=121
-  _globals['_ORDERRESPONSE']._serialized_start=123
-  _globals['_ORDERRESPONSE']._serialized_end=190
-  _globals['_TRADER']._serialized_start=192
-  _globals['_TRADER']._serialized_end=259
+  _globals['_ORDERREQUEST']._serialized_start=25
+  _globals['_ORDERREQUEST']._serialized_end=159
+  _globals['_ORDERRESPONSE']._serialized_start=161
+  _globals['_ORDERRESPONSE']._serialized_end=228
+  _globals['_TRADER']._serialized_start=230
+  _globals['_TRADER']._serialized_end=297
 # @@protoc_insertion_point(module_scope)

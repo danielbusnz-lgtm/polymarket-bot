@@ -11,7 +11,9 @@ response = stub.PlaceOrder(trader_pb2.OrderRequest(
     outcome="YES",
     price=0.65,
     size=20.0,
-    strategy="llm"
+    strategy="llm",
+    tick_size=0.01,
+    neg_risk=False,
 ))
 
 print("Success:", response.success)

@@ -37,8 +37,9 @@ sol! {
     }
 }
 
-// Polymarket CTF Exchange contract on Polygon
-const CTF_EXCHANGE: &str = "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e";
+// Polymarket CTF Exchange contracts on Polygon
+const CTF_EXCHANGE:          &str = "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e";
+const NEG_RISK_CTF_EXCHANGE: &str = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
 const CLOB_HOST:    &str = "https://clob.polymarket.com";
 
 // BUY = 0, SELL = 1
@@ -83,6 +84,7 @@ struct ApiResponse {
 // ---------------------------------------------------------------------------
 // Executor — holds auth material, exposes place_order()
 // ---------------------------------------------------------------------------
+#[derive(Clone)]
 pub struct Executor {
     signer:         PrivateKeySigner,
     http:           Client,
@@ -118,13 +120,18 @@ impl Executor {
     ///
     /// Returns the Polymarket order ID on success.
     pub async fn place_order(
-        &self,
+        &self, 
         token_id:  &str,
         side:      u8,
         price:     f64,
         size_usdc: f64,
+        tick_size: f64,
+        neg_risk:  bool,
     ) -> anyhow::Result<String> {
         let maker = self.signer.address();
+
+        // Snap price to the market's tick size (e.g. 0.01 → 2 sig digits)
+        let price = snap_price(price, tick_size);
 
         // Polymarket uses 6-decimal fixed-point (USDC has 6 decimals).
         // makerAmount = what you give;  takerAmount = what you expect back.
@@ -165,12 +172,13 @@ impl Executor {
             signatureType: 0,               // 0 = EOA (plain private key)
         };
 
-        // EIP-712 domain for Polymarket's exchange contract
+        // EIP-712 domain — pick contract based on whether this is a neg risk market
+        let contract = exchange_contract(neg_risk);
         let domain = eip712_domain! {
             name:               "Polymarket CTF Exchange",
             version:            "1",
             chain_id:           137u64,
-            verifying_contract: CTF_EXCHANGE.parse::<Address>()?,
+            verifying_contract: contract.parse::<Address>()?,
         };
 
         // Hash the struct then sign it — this is what the contract verifies on-chain
@@ -230,11 +238,84 @@ impl Executor {
             )),
         }
     }
+
+    /// Send a heartbeat to keep open orders alive.
+    /// Must be called every ~5s — Polymarket cancels all open orders after 15s without one.
+    pub async fn send_heartbeat(&self) -> anyhow::Result<()> {
+        let maker = self.signer.address();
+        let timestamp = unix_now().to_string();
+
+        // L2 auth: no body for heartbeat, so message is just timestamp + method + path
+        let message  = format!("{}POST/heartbeats", timestamp);
+        let hmac_sig = hmac_base64(&self.api_secret, &message)?;
+
+        let resp = self.http
+            .post(format!("{CLOB_HOST}/heartbeats"))
+            .header("POLY_ADDRESS",    format!("{maker:#x}"))
+            .header("POLY_SIGNATURE",  hmac_sig)
+            .header("POLY_TIMESTAMP",  &timestamp)
+            .header("POLY_API_KEY",    &self.api_key)
+            .header("POLY_PASSPHRASE", &self.api_passphrase)
+            .send()
+            .await?;
+
+        // Parse response — expect {"status": "ok"}
+        let body: serde_json::Value = resp.json().await?;
+        match body.get("status").and_then(|s| s.as_str()) {
+            Some("ok") => Ok(()),
+            _ => Err(anyhow::anyhow!("heartbeat rejected: {body}")),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn exchange_contract(neg_risk: bool) -> &'static str {
+    if neg_risk { NEG_RISK_CTF_EXCHANGE } else { CTF_EXCHANGE }
+}
+
+fn snap_price(price: f64, tick_size: f64) -> f64 {
+    let sig_digits = (-tick_size.log10()).round() as i32;
+    (price * 10f64.powi(sig_digits)).round() / 10f64.powi(sig_digits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // tick 0.1
+    #[test] fn snap_01_already_on_tick()  { assert_eq!(snap_price(0.3,    0.1), 0.3);  }
+    #[test] fn snap_01_round_down()       { assert_eq!(snap_price(0.34,   0.1), 0.3);  }
+    #[test] fn snap_01_round_up()         { assert_eq!(snap_price(0.36,   0.1), 0.4);  }
+
+    // tick 0.01
+    #[test] fn snap_001_already_on_tick() { assert_eq!(snap_price(0.43,   0.01), 0.43); }
+    #[test] fn snap_001_round_down()      { assert_eq!(snap_price(0.6234, 0.01), 0.62); }
+    #[test] fn snap_001_round_up()        { assert_eq!(snap_price(0.6261, 0.01), 0.63); }
+
+    // tick 0.001
+    #[test] fn snap_0001_already_on_tick(){ assert_eq!(snap_price(0.435,   0.001), 0.435); }
+    #[test] fn snap_0001_round_down()     { assert_eq!(snap_price(0.4354,  0.001), 0.435); }
+    #[test] fn snap_0001_round_up()       { assert_eq!(snap_price(0.4356,  0.001), 0.436); }
+
+    // tick 0.0001
+    #[test] fn snap_00001_already_on_tick(){ assert_eq!(snap_price(0.4352,  0.0001), 0.4352); }
+
+    // exchange_contract
+    #[test] fn uses_standard_contract() { assert_eq!(exchange_contract(false), CTF_EXCHANGE); }
+    #[test] fn uses_neg_risk_contract()  { assert_eq!(exchange_contract(true),  NEG_RISK_CTF_EXCHANGE); }
+
+    // hmac_base64
+    #[test]
+    fn test_hmac_base64_known_value() {
+        let result = hmac_base64("dGVzdHNlY3JldA==", "testmessage").unwrap();
+        assert_eq!(result, "DPLGYd_JOVnlyU2sLL0GsX_5OwHXnoFfkAd87HwECpU=");
+    }
+    #[test] fn snap_00001_round_down()     { assert_eq!(snap_price(0.43524, 0.0001), 0.4352); }
+    #[test] fn snap_00001_round_up()       { assert_eq!(snap_price(0.43526, 0.0001), 0.4353); }
+}
 
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -245,8 +326,10 @@ fn unix_now() -> u64 {
 
 /// HMAC-SHA256, output as base64 — matches what Polymarket expects
 fn hmac_base64(b64_secret: &str, message: &str) -> anyhow::Result<String> {
-    let secret = base64::engine::general_purpose::STANDARD
+    // Polymarket secrets may use URL-safe base64 (- and _ instead of + and /)
+    let secret = base64::engine::general_purpose::URL_SAFE
         .decode(b64_secret)
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(b64_secret))
         .map_err(|e| anyhow::anyhow!("bad API secret (expected base64): {e}"))?;
 
     let mut mac = Hmac::<Sha256>::new_from_slice(&secret)
@@ -254,5 +337,5 @@ fn hmac_base64(b64_secret: &str, message: &str) -> anyhow::Result<String> {
     mac.update(message.as_bytes());
 
     let result = mac.finalize().into_bytes();
-    Ok(base64::engine::general_purpose::STANDARD.encode(result))
+    Ok(base64::engine::general_purpose::URL_SAFE.encode(result))
 }
