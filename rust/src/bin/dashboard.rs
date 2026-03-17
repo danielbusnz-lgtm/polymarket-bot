@@ -1,513 +1,458 @@
-/// dashboard.rs — ratatui TUI for the Polymarket bot
-///
-/// Layout:
-///   ┌─────────────────────────┬───────────────┐
-///   │  Open Signals + Kelly   │  P&L Summary  │
-///   ├─────────────────────────┴───────────────┤
-///   │  Equity Curve ($1,000 start)            │
-///   ├─────────────────────────────────────────┤
-///   │  Resolved Trades (scrollable)           │
-///   └─────────────────────────────────────────┘
-
-use std::{
-    io,
-    time::{Duration, Instant},
-};
-
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use rusqlite::{Connection, Result as SqlResult, params};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Cell, Chart, Dataset, GraphType, Paragraph, Row, Table, TableState},
+    widgets::{Axis, Block, Borders, Cell, Chart, Dataset, GraphType, Row, Table, Tabs},
     Terminal,
 };
-use rusqlite::{Connection, Result as SqlResult};
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use std::io;
+
+const DB_PATH: &str = "bot.db";
+const SNAPSHOT_INTERVAL_SECS: u64 = 15 * 60; // 15 minutes
+const CRON_INTERVAL_SECS: u64    = 6 * 60 * 60; // 6 hours
 
 // ---------------------------------------------------------------------------
-// Data
+// Data structs
 // ---------------------------------------------------------------------------
-
-const STARTING_BANKROLL: f64 = 1000.0;
-const MAX_KELLY_FRACTION: f64 = 0.10; // never bet more than 10% of bankroll
 
 #[derive(Debug, Clone)]
-struct Signal {
-    id:        i64,
-    question:  String,
-    direction: String,
-    price:     f64,
-    edge:      f64,
-    avg_prob:  f64,
-    resolved:  bool,
-    correct:   Option<i64>,
+struct PortfolioSnapshot {
+    timestamp: i64,
+    value:     f64,
 }
 
-#[derive(Debug, Default)]
-struct Stats {
-    total:   usize,
-    open:    usize,
-    wins:    usize,
-    losses:  usize,
+#[derive(Debug, Clone)]
+struct Position {
+    title:         String,
+    direction:     String,  // "YES" or "NO"
+    amount_in:     f64,     // how much we invested
+    current_value: f64,     // what it's worth now
+    our_prob:      f64,     // our model's probability
+    market_prob:   f64,     // current market price
+    opened_at:     i64,
 }
 
 // ---------------------------------------------------------------------------
-// Kelly criterion
-//
-// For a prediction market bet at `price` with model probability `model_p`:
-//   full Kelly  = (model_p - price) / (1 - price)
-//   half Kelly  = full Kelly / 2          (standard safety divisor)
-//   bet size    = half Kelly * bankroll, capped at MAX_KELLY_FRACTION
+// DB init
 // ---------------------------------------------------------------------------
-fn kelly_bet(avg_prob: f64, price: f64, direction: &str, bankroll: f64) -> f64 {
-    let model_p = if direction == "YES" { avg_prob } else { 1.0 - avg_prob };
-    let edge = model_p - price;
-    if edge <= 0.0 || price >= 1.0 {
-        return 0.0;
-    }
-    let full_kelly   = edge / (1.0 - price);
-    let half_kelly   = full_kelly * 0.5;
-    let fraction     = half_kelly.min(MAX_KELLY_FRACTION);
-    fraction * bankroll
+
+fn init_db(conn: &Connection) -> SqlResult<()> {
+    conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+            id        INTEGER PRIMARY KEY,
+            timestamp INTEGER NOT NULL,
+            value     REAL NOT NULL,
+            is_paper  INTEGER NOT NULL  -- 0 = live, 1 = paper
+        );
+
+        CREATE TABLE IF NOT EXISTS positions (
+            id            INTEGER PRIMARY KEY,
+            title         TEXT NOT NULL,
+            direction     TEXT NOT NULL,   -- YES or NO
+            amount_in     REAL NOT NULL,   -- how much we invested
+            current_value REAL NOT NULL,   -- what it's worth now
+            our_prob      REAL NOT NULL,   -- our model's probability
+            market_prob   REAL NOT NULL,   -- current market price
+            is_paper      INTEGER NOT NULL, -- 0 = live, 1 = paper
+            opened_at     INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS cron_runs (
+            id     INTEGER PRIMARY KEY,
+            ran_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS signals (
+            id            INTEGER PRIMARY KEY,
+            run_at        TEXT    NOT NULL,
+            market_id     TEXT    NOT NULL,
+            question      TEXT    NOT NULL,
+            direction     TEXT    NOT NULL,
+            price         REAL    NOT NULL,  -- market price at signal time
+            edge          REAL    NOT NULL,  -- our edge (our_prob - market_price)
+            avg_prob      REAL    NOT NULL,  -- our model's probability
+            disagreement  REAL    NOT NULL,
+            resolved      INTEGER NOT NULL DEFAULT 0,
+            outcome       TEXT,              -- nullable until resolved
+            correct       INTEGER,           -- nullable until resolved
+            token_id      TEXT    NOT NULL DEFAULT ''
+        );
+    ")
 }
 
 // ---------------------------------------------------------------------------
-// DB
+// DB query functions
 // ---------------------------------------------------------------------------
 
-fn load_signals(db_path: &str) -> SqlResult<Vec<Signal>> {
-    let conn = Connection::open(db_path)?;
+/// Load portfolio snapshots for one tab (live or paper), ordered by time.
+fn load_snapshots(conn: &Connection, is_paper: bool) -> SqlResult<Vec<PortfolioSnapshot>> {
+    let flag = if is_paper { 1 } else { 0 };
     let mut stmt = conn.prepare(
-        "SELECT id, question, direction, price, edge, avg_prob, resolved, correct
-         FROM signals ORDER BY id ASC"
+        "SELECT timestamp, value FROM portfolio_snapshots
+         WHERE is_paper = ?1
+         ORDER BY timestamp ASC"
     )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Signal {
-            id:        row.get(0)?,
-            question:  row.get(1)?,
-            direction: row.get(2)?,
-            price:     row.get(3)?,
-            edge:      row.get(4)?,
-            avg_prob:  row.get(5)?,
-            resolved:  row.get::<_, i64>(6)? == 1,
-            correct:   row.get(7)?,
+    let rows = stmt.query_map(params![flag], |row| {
+        Ok(PortfolioSnapshot {
+            timestamp: row.get(0)?,
+            value:     row.get(1)?,
         })
     })?;
     rows.collect()
 }
 
-fn calc_stats(signals: &[Signal]) -> Stats {
-    Stats {
-        total:   signals.len(),
-        open:    signals.iter().filter(|s| !s.resolved).count(),
-        wins:    signals.iter().filter(|s| s.correct == Some(1)).count(),
-        losses:  signals.iter().filter(|s| s.correct == Some(0)).count(),
-    }
+/// Load open positions for one tab (live or paper).
+fn load_positions(conn: &Connection, is_paper: bool) -> SqlResult<Vec<Position>> {
+    let flag = if is_paper { 1 } else { 0 };
+    let mut stmt = conn.prepare(
+        "SELECT title, direction, amount_in, current_value,
+                our_prob, market_prob, opened_at
+         FROM positions
+         WHERE is_paper = ?1
+         ORDER BY opened_at DESC"
+    )?;
+    let rows = stmt.query_map(params![flag], |row| {
+        Ok(Position {
+            title:         row.get(0)?,
+            direction:     row.get(1)?,
+            amount_in:     row.get(2)?,
+            current_value: row.get(3)?,
+            our_prob:      row.get(4)?,
+            market_prob:   row.get(5)?,
+            opened_at:     row.get(6)?,
+        })
+    })?;
+    rows.collect()
 }
 
-/// Simulate bankroll growth using half-Kelly sizing on resolved trades.
-/// Always returns at least 2 points so the chart renders immediately.
-fn simulate_equity(signals: &[Signal]) -> Vec<(f64, f64)> {
-    let mut bankroll = STARTING_BANKROLL;
-    let mut points: Vec<(f64, f64)> = vec![(0.0, bankroll)];
-
-    let resolved: Vec<&Signal> = signals.iter().filter(|s| s.resolved).collect();
-
-    for (i, s) in resolved.iter().enumerate() {
-        let bet = kelly_bet(s.avg_prob, s.price, &s.direction, bankroll);
-        match s.correct {
-            Some(1) => {
-                // WIN: profit = bet * (1 - price) / price  (shares pay $1, cost price each)
-                let profit = bet * (1.0 - s.price) / s.price;
-                bankroll += profit;
-            }
-            Some(0) => {
-                // LOSS: lose the bet
-                bankroll -= bet;
-            }
-            _ => {}
-        }
-        bankroll = bankroll.max(0.0);
-        points.push(((i + 1) as f64, bankroll));
+/// Return the Unix timestamp of the most recent cron run, or None if no runs yet.
+fn last_cron_run(conn: &Connection) -> SqlResult<Option<i64>> {
+    let result = conn.query_row(
+        "SELECT ran_at FROM cron_runs ORDER BY ran_at DESC LIMIT 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    );
+    match result {
+        Ok(ts)                                      => Ok(Some(ts)),
+        Err(rusqlite::Error::QueryReturnedNoRows)   => Ok(None),
+        Err(e)                                      => Err(e),
     }
-
-    // Always pad to at least 2 points so the chart renders even with no resolved trades
-    if points.len() == 1 {
-        points.push((1.0, STARTING_BANKROLL));
-    }
-
-    points
 }
 
 // ---------------------------------------------------------------------------
-// App
+// App state
 // ---------------------------------------------------------------------------
 
 struct App {
-    db_path:       String,
-    signals:       Vec<Signal>,
-    stats:         Stats,
-    equity:        Vec<(f64, f64)>,
-    table_state:   TableState,
-    last_refresh:  Instant,
-    scroll_offset: usize,
+    active_tab:      usize,
+    live_snapshots:  Vec<PortfolioSnapshot>,
+    live_positions:  Vec<Position>,
+    paper_snapshots: Vec<PortfolioSnapshot>,
+    paper_positions: Vec<Position>,
+    demo_snapshots:  Vec<PortfolioSnapshot>,
+    demo_positions:  Vec<Position>,
+    last_cron:       Option<i64>,
 }
 
 impl App {
-    fn new(db_path: &str) -> Self {
-        let mut app = Self {
-            db_path:       db_path.to_string(),
-            signals:       vec![],
-            stats:         Stats::default(),
-            equity:        vec![(0.0, STARTING_BANKROLL)],
-            table_state:   TableState::default(),
-            last_refresh:  Instant::now(),
-            scroll_offset: 0,
-        };
-        app.refresh();
-        app
+    fn load(conn: &Connection) -> anyhow::Result<Self> {
+        Ok(Self {
+            active_tab:      0,
+            live_snapshots:  load_snapshots(conn, false)?,
+            live_positions:  load_positions(conn, false)?,
+            paper_snapshots: load_snapshots(conn, true)?,
+            paper_positions: load_positions(conn, true)?,
+            demo_snapshots:  demo_snapshots(),
+            demo_positions:  demo_positions(),
+            last_cron:       last_cron_run(conn)?,
+        })
     }
 
-    fn refresh(&mut self) {
-        if let Ok(signals) = load_signals(&self.db_path) {
-            self.stats   = calc_stats(&signals);
-            self.equity  = simulate_equity(&signals);
-            self.signals = signals;
+    fn refresh(&mut self, conn: &Connection) -> anyhow::Result<()> {
+        self.live_snapshots  = load_snapshots(conn, false)?;
+        self.live_positions  = load_positions(conn, false)?;
+        self.paper_snapshots = load_snapshots(conn, true)?;
+        self.paper_positions = load_positions(conn, true)?;
+        self.last_cron       = last_cron_run(conn)?;
+        Ok(())
+    }
+
+    /// Seconds until the next cron run (based on last run + 6h interval).
+    /// Returns None if no cron run has happened yet.
+    fn secs_until_next_cron(&self) -> Option<i64> {
+        let last = self.last_cron?;
+        let next = last + CRON_INTERVAL_SECS as i64;
+        let now  = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        Some((next - now).max(0))
+    }
+
+    fn snapshots(&self) -> &[PortfolioSnapshot] {
+        match self.active_tab {
+            0 => &self.live_snapshots,
+            1 => &self.paper_snapshots,
+            _ => &self.demo_snapshots,
         }
-        self.last_refresh = Instant::now();
     }
 
-    fn scroll_down(&mut self) {
-        let resolved = self.signals.iter().filter(|s| s.resolved).count();
-        if self.scroll_offset + 1 < resolved {
-            self.scroll_offset += 1;
+    fn positions(&self) -> &[Position] {
+        match self.active_tab {
+            0 => &self.live_positions,
+            1 => &self.paper_positions,
+            _ => &self.demo_positions,
         }
     }
+}
 
-    fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-    }
+// ---------------------------------------------------------------------------
+// Demo data
+// ---------------------------------------------------------------------------
+
+fn demo_snapshots() -> Vec<PortfolioSnapshot> {
+    let base_values = [
+        1000.0, 1012.0, 998.0, 1025.0, 1040.0, 1035.0, 1060.0, 1055.0,
+        1080.0, 1072.0, 1095.0, 1110.0, 1098.0, 1125.0, 1140.0, 1132.0,
+        1158.0, 1170.0, 1162.0, 1185.0, 1200.0, 1192.0, 1215.0, 1230.0,
+    ];
+    base_values.iter().enumerate()
+        .map(|(i, &v)| PortfolioSnapshot { timestamp: i as i64, value: v })
+        .collect()
+}
+
+fn demo_positions() -> Vec<Position> {
+    vec![
+        Position {
+            title:         "Will Trump sign an executive order on crypto before April 2025?".to_string(),
+            direction:     "YES".to_string(),
+            amount_in:     50.0,
+            current_value: 68.50,
+            our_prob:      0.82,
+            market_prob:   0.74,
+            opened_at:     0,
+        },
+        Position {
+            title:         "Will the Fed cut rates in March 2025?".to_string(),
+            direction:     "NO".to_string(),
+            amount_in:     30.0,
+            current_value: 24.90,
+            our_prob:      0.35,
+            market_prob:   0.41,
+            opened_at:     0,
+        },
+        Position {
+            title:         "Will Bitcoin hit $100k before June 2025?".to_string(),
+            direction:     "YES".to_string(),
+            amount_in:     75.0,
+            current_value: 91.25,
+            our_prob:      0.68,
+            market_prob:   0.55,
+            opened_at:     0,
+        },
+        Position {
+            title:         "Will Nvidia stock close above $1000 in Q1 2025?".to_string(),
+            direction:     "NO".to_string(),
+            amount_in:     20.0,
+            current_value: 16.40,
+            our_prob:      0.28,
+            market_prob:   0.33,
+            opened_at:     0,
+        },
+    ]
 }
 
 // ---------------------------------------------------------------------------
 // UI
 // ---------------------------------------------------------------------------
 
-fn ui(frame: &mut ratatui::Frame, app: &mut App) {
-    let area = frame.area();
+fn draw(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &App) -> anyhow::Result<()> {
+    terminal.draw(|frame| {
+        let area = frame.area();
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
-            Constraint::Percentage(40),
-        ])
-        .split(area);
+        // Split into: tab bar | body | status bar
+        let root = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),   // tab bar
+                Constraint::Min(0),      // body
+                Constraint::Length(1),   // status bar
+            ])
+            .split(area);
 
-    // Top row: signals + P&L side by side
-    let top = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(rows[0]);
+        // --- Tab bar ---
+        let tab_titles = vec![
+            Line::from(Span::raw(" Live ")),
+            Line::from(Span::raw(" Paper ")),
+            Line::from(Span::raw(" Demo ")),
+        ];
+        let tabs = Tabs::new(tab_titles)
+            .select(app.active_tab)
+            .block(Block::default().borders(Borders::ALL).title("Polymarket Bot"))
+            .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .divider("|");
+        frame.render_widget(tabs, root[0]);
 
-    render_open_signals(frame, app, top[0]);
-    render_pnl(frame, app, top[1]);
-    render_equity_chart(frame, app, rows[1]);
-    render_history(frame, app, rows[2]);
-}
+        // Split body into: chart (top 40%) | table (bottom 60%)
+        let body = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(40),
+                Constraint::Percentage(60),
+            ])
+            .split(root[1]);
 
-fn render_open_signals(frame: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
-    let open: Vec<&Signal> = app.signals.iter().filter(|s| !s.resolved).collect();
+        // --- Portfolio chart ---
+        let snapshots = app.snapshots();
+        let chart_data: Vec<(f64, f64)> = snapshots.iter().enumerate()
+            .map(|(i, s)| (i as f64, s.value))
+            .collect();
 
-    // Use current bankroll (last point in equity curve) for Kelly sizing
-    let bankroll = app.equity.last().map(|p| p.1).unwrap_or(STARTING_BANKROLL);
-
-    let header = Row::new(vec!["#", "Dir", "Edge", "Kelly $", "Question"])
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-
-    let rows: Vec<Row> = open.iter().map(|s| {
-        let q = if s.question.len() > 34 {
-            format!("{}…", &s.question[..33])
+        let (min_val, max_val) = if chart_data.is_empty() {
+            (0.0, 1.0)
         } else {
-            s.question.clone()
+            let min = chart_data.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+            let max = chart_data.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+            let padding = (max - min) * 0.1;
+            (min - padding, max + padding)
         };
 
-        let bet     = kelly_bet(s.avg_prob, s.price, &s.direction, bankroll);
-        let edge_color = if s.edge >= 0.20 { Color::Green }
-                         else if s.edge >= 0.12 { Color::Cyan }
-                         else { Color::White };
+        let dataset = Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Cyan))
+            .data(&chart_data);
 
-        Row::new(vec![
-            Cell::from(s.id.to_string()),
-            Cell::from(s.direction.clone()).style(Style::default().fg(
-                if s.direction == "YES" { Color::Green } else { Color::Red }
-            )),
-            Cell::from(format!("{:.0}%", s.edge * 100.0))
-                .style(Style::default().fg(edge_color)),
-            Cell::from(format!("${:.0}", bet))
-                .style(Style::default().fg(Color::Magenta)),
-            Cell::from(q),
-        ])
-    }).collect();
+        let current_value = snapshots.last().map(|s| s.value).unwrap_or(0.0);
+        let chart_title = format!("Portfolio Value  ${:.2}", current_value);
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(4),
-            Constraint::Length(4),
-            Constraint::Length(5),
-            Constraint::Length(8),
-            Constraint::Min(10),
-        ],
-    )
-    .header(header)
-    .block(
-        Block::default()
-            .title(format!(" Open Signals ({}) — half-Kelly sizing ", open.len()))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
+        let chart = Chart::new(vec![dataset])
+            .block(Block::default().borders(Borders::ALL).title(chart_title))
+            .x_axis(Axis::default().bounds([0.0, chart_data.len().max(1) as f64]))
+            .y_axis(
+                Axis::default()
+                    .bounds([min_val, max_val])
+                    .labels(vec![
+                        Span::raw(format!("${:.0}", min_val)),
+                        Span::raw(format!("${:.0}", max_val)),
+                    ]),
+            );
+        frame.render_widget(chart, body[0]);
 
-    frame.render_widget(table, area);
-}
+        // --- Positions table ---
+        let header = Row::new(vec!["Market", "Dir", "In", "Value", "P&L", "Our%", "Mkt%"])
+            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .height(1);
 
-fn render_pnl(frame: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
-    let resolved  = app.stats.wins + app.stats.losses;
-    let win_rate  = if resolved > 0 {
-        format!("{:.1}%", app.stats.wins as f64 / resolved as f64 * 100.0)
-    } else {
-        "—".to_string()
-    };
-    let bankroll  = app.equity.last().map(|p| p.1).unwrap_or(STARTING_BANKROLL);
-    let pnl       = bankroll - STARTING_BANKROLL;
-    let pnl_color = if pnl >= 0.0 { Color::Green } else { Color::Red };
-    let wr_color  = if resolved == 0 { Color::White }
-                    else if app.stats.wins as f64 / resolved.max(1) as f64 >= 0.60 { Color::Green }
-                    else { Color::Red };
+        let rows: Vec<Row> = app.positions().iter().map(|p| {
+            let pnl     = p.current_value - p.amount_in;
+            let pnl_color = if pnl >= 0.0 { Color::Green } else { Color::Red };
+            let dir_color = if p.direction == "YES" { Color::Green } else { Color::Red };
 
-    let secs = app.last_refresh.elapsed().as_secs();
+            // Truncate long market titles to fit the column
+            let title = if p.title.len() > 35 {
+                format!("{}...", &p.title[..32])
+            } else {
+                p.title.clone()
+            };
 
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("  Bankroll : "),
-            Span::styled(
-                format!("${bankroll:.0}"),
-                Style::default().fg(pnl_color).add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("  P&L      : "),
-            Span::styled(
-                format!("{}{:.0}", if pnl >= 0.0 { "+" } else { "" }, pnl),
-                Style::default().fg(pnl_color),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("  Signals  : "),
-            Span::styled(app.stats.total.to_string(), Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::raw("  Open     : "),
-            Span::styled(app.stats.open.to_string(), Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from(vec![
-            Span::raw("  Wins     : "),
-            Span::styled(app.stats.wins.to_string(), Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::raw("  Losses   : "),
-            Span::styled(app.stats.losses.to_string(), Style::default().fg(Color::Red)),
-        ]),
-        Line::from(vec![
-            Span::raw("  Win rate : "),
-            Span::styled(win_rate, Style::default().fg(wr_color).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("  [{secs}s ago] r=refresh q=quit"),
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
+            Row::new(vec![
+                Cell::from(title),
+                Cell::from(p.direction.clone()).style(Style::default().fg(dir_color)),
+                Cell::from(format!("${:.2}", p.amount_in)),
+                Cell::from(format!("${:.2}", p.current_value)),
+                Cell::from(format!("{:+.2}", pnl)).style(Style::default().fg(pnl_color)),
+                Cell::from(format!("{:.0}%", p.our_prob * 100.0)),
+                Cell::from(format!("{:.0}%", p.market_prob * 100.0)),
+            ])
+        }).collect();
 
-    let para = Paragraph::new(text).block(
-        Block::default()
-            .title(" P&L Summary ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
-    frame.render_widget(para, area);
-}
-
-fn render_equity_chart(frame: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
-    let data = &app.equity;
-
-    let max_x = data.last().map(|p| p.0).unwrap_or(1.0).max(1.0);
-    let min_y = data.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-    let max_y = data.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-
-    // Pad Y range so the line doesn't hug the edges
-    let y_pad   = ((max_y - min_y) * 0.15).max(50.0);
-    let y_min   = (min_y - y_pad).max(0.0);
-    let y_max   = max_y + y_pad;
-
-    // Color: green if profitable, red if below starting bankroll
-    let current  = data.last().map(|p| p.1).unwrap_or(STARTING_BANKROLL);
-    let line_color = if current >= STARTING_BANKROLL { Color::Green } else { Color::Red };
-
-    let dataset = Dataset::default()
-        .name("Bankroll")
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(line_color))
-        .data(data);
-
-    // X axis labels
-    let x_labels = vec![
-        ratatui::text::Span::raw("0"),
-        ratatui::text::Span::raw(format!("{}", (max_x / 2.0).round() as usize)),
-        ratatui::text::Span::raw(format!("{}", max_x as usize)),
-    ];
-
-    // Y axis labels
-    let y_labels = vec![
-        ratatui::text::Span::raw(format!("${:.0}", y_min)),
-        ratatui::text::Span::raw(format!("${:.0}", (y_min + y_max) / 2.0)),
-        ratatui::text::Span::raw(format!("${:.0}", y_max)),
-    ];
-
-    let chart = Chart::new(vec![dataset])
-        .block(
-            Block::default()
-                .title(format!(
-                    " Equity Curve — ${:.0} simulated bankroll (half-Kelly) ",
-                    current
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Min(36),      // Market title
+                Constraint::Length(4),    // Dir
+                Constraint::Length(8),    // In
+                Constraint::Length(8),    // Value
+                Constraint::Length(8),    // P&L
+                Constraint::Length(6),    // Our%
+                Constraint::Length(6),    // Mkt%
+            ],
         )
-        .x_axis(
-            Axis::default()
-                .title("Trades")
-                .style(Style::default().fg(Color::DarkGray))
-                .bounds([0.0, max_x])
-                .labels(x_labels),
-        )
-        .y_axis(
-            Axis::default()
-                .title("Bankroll ($)")
-                .style(Style::default().fg(Color::DarkGray))
-                .bounds([y_min, y_max])
-                .labels(y_labels),
-        );
+        .header(header)
+        .block(Block::default().borders(Borders::ALL).title("Open Positions"));
+        frame.render_widget(table, body[1]);
 
-    frame.render_widget(chart, area);
-}
-
-fn render_history(frame: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::Rect) {
-    let resolved: Vec<&Signal> = app.signals.iter().filter(|s| s.resolved).collect();
-
-    let bankroll    = STARTING_BANKROLL;
-    let visible     = (area.height as usize).saturating_sub(3);
-    let start       = app.scroll_offset.min(resolved.len().saturating_sub(visible));
-
-    let header = Row::new(vec!["#", "Dir", "Edge", "Kelly $", "Result", "Question"])
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-
-    let rows: Vec<Row> = resolved.iter().skip(start).take(visible).map(|s| {
-        let q = if s.question.len() > 34 {
-            format!("{}…", &s.question[..33])
-        } else {
-            s.question.clone()
+        // --- Status bar ---
+        let cron_text = match app.secs_until_next_cron() {
+            None     => "Next LLM run: pending first run".to_string(),
+            Some(s)  => format!("Next LLM run in: {}h {}m", s / 3600, (s % 3600) / 60),
         };
-        let bet = kelly_bet(s.avg_prob, s.price, &s.direction, bankroll);
-        let (result_str, result_color) = match s.correct {
-            Some(1) => ("WIN",  Color::Green),
-            Some(0) => ("LOSS", Color::Red),
-            _       => ("?",    Color::White),
-        };
-        Row::new(vec![
-            Cell::from(s.id.to_string()),
-            Cell::from(s.direction.clone()).style(Style::default().fg(
-                if s.direction == "YES" { Color::Green } else { Color::Red }
-            )),
-            Cell::from(format!("{:.0}%", s.edge * 100.0)),
-            Cell::from(format!("${:.0}", bet))
-                .style(Style::default().fg(Color::Magenta)),
-            Cell::from(result_str).style(Style::default().fg(result_color).add_modifier(Modifier::BOLD)),
-            Cell::from(q),
-        ])
-    }).collect();
-
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(4),
-            Constraint::Length(4),
-            Constraint::Length(5),
-            Constraint::Length(8),
-            Constraint::Length(5),
-            Constraint::Min(10),
-        ],
-    )
-    .header(header)
-    .block(
-        Block::default()
-            .title(format!(" Resolved Trades ({}) ", resolved.len()))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
-
-    frame.render_stateful_widget(table, area, &mut app.table_state);
+        let status = Line::from(vec![
+            Span::styled(cron_text, Style::default().fg(Color::DarkGray)),
+            Span::raw("   "),
+            Span::styled("q", Style::default().fg(Color::Yellow)),
+            Span::styled(" quit  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tab", Style::default().fg(Color::Yellow)),
+            Span::styled(" switch tab", Style::default().fg(Color::DarkGray)),
+        ]);
+        frame.render_widget(status, root[2]);
+    })?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 
-fn main() -> io::Result<()> {
-    let db_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "python/paper_trades.db".to_string());
+fn main() -> anyhow::Result<()> {
+    let conn = Connection::open(DB_PATH)?;
+    init_db(&conn)?;
 
+    // Set up terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-
-    let backend      = CrosstermBackend::new(stdout);
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend  = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let mut app      = App::new(&db_path);
+
+    let mut app           = App::load(&conn)?;
+    let mut last_refresh  = std::time::Instant::now();
+    let refresh_interval  = std::time::Duration::from_secs(30);
 
     loop {
-        terminal.draw(|f| ui(f, &mut app))?;
+        draw(&mut terminal, &app)?;
 
-        if event::poll(Duration::from_millis(250))? {
+        // Poll for a key event with a 250ms timeout so the loop stays responsive
+        if event::poll(std::time::Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => break,
-                    KeyCode::Char('r') | KeyCode::Char('R') => app.refresh(),
-                    KeyCode::Down  | KeyCode::Char('j') => app.scroll_down(),
-                    KeyCode::Up    | KeyCode::Char('k') => app.scroll_up(),
+                    KeyCode::Tab => {
+                        app.active_tab = (app.active_tab + 1) % 3;
+                    }
                     _ => {}
                 }
             }
         }
 
-        if app.last_refresh.elapsed() >= Duration::from_secs(2) {
-            app.refresh();
+        // Refresh data from DB every 30 seconds
+        if last_refresh.elapsed() >= refresh_interval {
+            app.refresh(&conn)?;
+            last_refresh = std::time::Instant::now();
         }
     }
 
+    // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
-    terminal.show_cursor()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
 }
