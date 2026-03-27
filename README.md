@@ -23,11 +23,7 @@ Prediction markets price events as probabilities, but they're often wrong on pol
 5. **Signal**: If consensus edge >= 12% and disagreement <= 15%, log a trade signal
 6. **Execution**: Signal goes over gRPC to the Rust executor, which signs and submits to Polymarket's CLOB
 
-```
-Gamma API → Funnel → Claude Screen → 5x LLM Vote → Signal
-                                                      ↓
-                              Polymarket CLOB ← Rust Executor ← gRPC
-```
+See the [architecture diagram](#architecture) below for the full pipeline.
 
 ## LLM Consensus Engine
 
