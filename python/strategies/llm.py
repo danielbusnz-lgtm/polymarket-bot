@@ -205,22 +205,39 @@ async def tier2_analyze(market: dict) -> dict | None:
 
     news = await fetch_news(question)
 
-    claude_p, gpt_p, gemini_p, grok_p, deepseek_p = await asyncio.gather(
-        call_claude(question, news),
-        call_gpt(question, news),
-        call_gemini(question, news),
-        call_grok(question, news),
-        call_deepseek(question, news),
+    async def safe_call(name: str, coro):
+        try:
+            return await coro
+        except Exception as e:
+            print(f"  [WARN] {name} failed: {e}")
+            return None
+
+    results = await asyncio.gather(
+        safe_call("Claude", call_claude(question, news)),
+        safe_call("GPT", call_gpt(question, news)),
+        safe_call("Gemini", call_gemini(question, news)),
+        safe_call("Grok", call_grok(question, news)),
+        safe_call("DeepSeek", call_deepseek(question, news)),
     )
 
-    probs        = [claude_p, gpt_p, gemini_p, grok_p, deepseek_p]
-    trimmed      = sorted(probs)[1:-1]   # drop min and max, keep middle 3
+    model_names = ["Claude", "GPT", "Gemini", "Grok", "DeepSeek"]
+    probs = [r for r in results if r is not None]
+
+    if len(probs) < 3:
+        print(f"\n{question[:60]}")
+        print(f"  → SKIP (only {len(probs)}/5 models returned, need at least 3)")
+        return None
+
+    trimmed      = sorted(probs)[1:-1] if len(probs) >= 5 else probs  # trim only if we have 5
     avg          = sum(trimmed) / len(trimmed)
     disagreement = max(probs) - min(probs)
     edge         = avg - yes_price
 
     print(f"\n{question[:60]}")
-    print(f"  Claude={claude_p:.2f}  GPT={gpt_p:.2f}  Gemini={gemini_p:.2f}  Grok={grok_p:.2f}  DeepSeek={deepseek_p:.2f}")
+    parts = []
+    for name, r in zip(model_names, results):
+        parts.append(f"{name}={r:.2f}" if r is not None else f"{name}=FAIL")
+    print(f"  {' '.join(parts)}")
     print(f"  avg={avg:.2f}  market={yes_price:.2f}  edge={edge:+.2f}  disagreement={disagreement:.2f}")
 
     if disagreement > MAX_DISAGREEMENT:
