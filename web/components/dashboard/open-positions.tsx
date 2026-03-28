@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useState, useMemo } from "react"
 import {
   Table,
   TableHeader,
@@ -11,8 +11,9 @@ import {
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 import type { Signal } from "@/lib/types"
-import { ModelVoteStrip, type VoteData, type ModelVote } from "./model-vote-strip"
-import { PositionStateStrip } from "./position-state-strip"
+import { type VoteData, type ModelVote } from "./model-vote-strip"
+import { PositionDetail } from "./position-detail"
+import { usePrices } from "@/lib/hooks"
 
 interface OpenPositionsProps {
   signals: Signal[]
@@ -64,6 +65,12 @@ const HEAD = "h-9 px-3 font-mono text-[0.65rem] uppercase tracking-wider text-[#
 
 export function OpenPositions({ signals, className }: OpenPositionsProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+
+  const tokenIds = useMemo(
+    () => signals.map((s) => s.token_id).filter(Boolean),
+    [signals]
+  )
+  const { data: livePrices } = usePrices(tokenIds)
 
   const toggleRow = (id: number) => {
     setExpandedRows((prev) => {
@@ -177,10 +184,11 @@ export function OpenPositions({ signals, className }: OpenPositionsProps) {
                 {isExpanded && (
                   <TableRow className="hover:bg-transparent border-b border-[#1a1a1a] bg-[#0a0a0a]">
                     <TableCell colSpan={7} className="p-0">
-                      <div className="border-l-2 border-[#1e1e1e]">
-                        <PositionStateStrip signal={sig} />
-                        <ModelVoteStrip data={voteData} />
-                      </div>
+                      <PositionDetail
+                        signal={sig}
+                        voteData={voteData}
+                        livePrice={livePrices?.[sig.token_id] ?? null}
+                      />
                     </TableCell>
                   </TableRow>
                 )}

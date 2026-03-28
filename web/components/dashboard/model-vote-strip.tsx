@@ -17,11 +17,11 @@ export interface VoteData {
 }
 
 const MODEL_COLORS: Record<string, string> = {
-  Claude: "#a78bfa",
-  "GPT-4o": "#3b82f6",
-  Gemini: "#f472b6",
-  "Grok-3": "#fb923c",
-  DeepSeek: "#14b8a6",
+  Claude: "#d97757",
+  "GPT-4o": "#10a37f",
+  Gemini: "#4796e3",
+  "Grok-3": "#ffffff",
+  DeepSeek: "#4d6bfe",
 }
 
 function pct(n: number): string {

@@ -138,13 +138,18 @@ export default function DashboardLayout({
       cards: [
         {
           label: "Max Drawdown",
-          value: `-${(mddPct * 100).toFixed(1)}%`,
+          value: `\u2212${(mddPct * 100).toFixed(1)}%`,
           accent: mddAccent,
+          thresholdBar: { current: mddPct, max: 0.20 },
         },
         {
           label: "Sharpe Ratio",
           value: sharpeDisplay,
           accent: sharpeAccent,
+          thresholdBar: {
+            current: sharpe !== null && sharpe !== undefined ? Math.abs(sharpe) : 0,
+            max: 5.0,
+          },
         },
       ],
     },
@@ -153,9 +158,6 @@ export default function DashboardLayout({
   return (
     <div className="flex min-h-screen flex-col">
       <TopBar
-        nav={latestValue}
-        dailyPnL={dailyPnL}
-        dailyPnLPct={dailyPnLPct}
         isRunning={true}
         isPaperMode={isPaperMode}
         onModeToggle={setIsPaperMode}

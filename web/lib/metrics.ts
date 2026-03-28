@@ -36,17 +36,34 @@ function computeMaxDrawdown(snapshots: PortfolioSnapshot[]): {
 }
 
 /**
+ * Resample snapshots to daily granularity by picking the last snapshot per day.
+ */
+function resampleDaily(snapshots: PortfolioSnapshot[]): PortfolioSnapshot[] {
+  if (snapshots.length === 0) return []
+
+  const byDay = new Map<string, PortfolioSnapshot>()
+  for (const snap of snapshots) {
+    const day = new Date(snap.timestamp * 1000).toISOString().slice(0, 10)
+    byDay.set(day, snap)
+  }
+
+  return Array.from(byDay.values()).sort((a, b) => a.timestamp - b.timestamp)
+}
+
+/**
  * Compute annualized Sharpe ratio from snapshot series.
- * Uses simple period returns, assumes risk-free rate of 0.
+ * Resamples to daily returns first to avoid inflated ratios from
+ * high-frequency snapshot intervals. Assumes risk-free rate of 0.
  */
 function computeSharpe(snapshots: PortfolioSnapshot[]): number | null {
-  if (snapshots.length < 3) return null
+  const daily = resampleDaily(snapshots)
+  if (daily.length < 3) return null
 
   const returns: number[] = []
-  for (let i = 1; i < snapshots.length; i++) {
-    const prev = snapshots[i - 1].value
+  for (let i = 1; i < daily.length; i++) {
+    const prev = daily[i - 1].value
     if (prev > 0) {
-      returns.push((snapshots[i].value - prev) / prev)
+      returns.push((daily[i].value - prev) / prev)
     }
   }
 
@@ -59,13 +76,8 @@ function computeSharpe(snapshots: PortfolioSnapshot[]): number | null {
 
   if (std === 0) return null
 
-  // Estimate periods per year from average interval
-  const totalSec =
-    snapshots[snapshots.length - 1].timestamp - snapshots[0].timestamp
-  const avgInterval = totalSec / (snapshots.length - 1)
-  const periodsPerYear = avgInterval > 0 ? (365.25 * 86_400) / avgInterval : 252
-
-  return (mean / std) * Math.sqrt(periodsPerYear)
+  // Annualize from daily: √252 trading days
+  return (mean / std) * Math.sqrt(252)
 }
 
 /**

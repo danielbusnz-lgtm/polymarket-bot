@@ -132,3 +132,19 @@
     @apply font-sans;
   }
 }
+
+/* KPI value flash on change */
+@keyframes flash-up {
+  0%   { background-color: rgba(22, 199, 132, 0.25); }
+  100% { background-color: transparent; }
+}
+@keyframes flash-down {
+  0%   { background-color: rgba(242, 54, 69, 0.25); }
+  100% { background-color: transparent; }
+}
+.kpi-flash-up {
+  animation: flash-up 400ms ease-out forwards;
+}
+.kpi-flash-down {
+  animation: flash-down 400ms ease-out forwards;
+}

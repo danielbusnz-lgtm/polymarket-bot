@@ -37,3 +37,12 @@ export function useCron() {
     queryFn: () => api.cron(),
   })
 }
+
+export function usePrices(tokenIds: string[]) {
+  return useQuery({
+    queryKey: ["prices", tokenIds],
+    queryFn: () => api.prices(tokenIds),
+    enabled: tokenIds.length > 0,
+    refetchInterval: 15_000,
+  })
+}

@@ -3,6 +3,7 @@ import sqlite3
 import time
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -183,3 +184,57 @@ def get_cron() -> dict:
     next_run = last_run + CRON_INTERVAL_SECONDS
     seconds_until_next = max(0, int(next_run - now))
     return {"last_run": last_run, "seconds_until_next": seconds_until_next}
+
+
+# ---------------------------------------------------------------------------
+# Live prices from Polymarket CLOB
+# ---------------------------------------------------------------------------
+
+CLOB_BASE = "https://clob.polymarket.com"
+PRICE_CACHE_TTL = 20  # seconds
+
+_price_cache: dict[str, tuple[float, float]] = {}  # token_id -> (price, fetched_at)
+
+
+def _fetch_midpoints(token_ids: list[str]) -> dict[str, float]:
+    if not token_ids:
+        return {}
+    payload = [{"token_id": tid} for tid in token_ids]
+    try:
+        resp = httpx.post(f"{CLOB_BASE}/midpoints", json=payload, timeout=5.0)
+        resp.raise_for_status()
+        data = resp.json()
+        return {tid: float(data[tid]) for tid in data if data[tid]}
+    except Exception:
+        return {}
+
+
+def _get_prices(token_ids: list[str]) -> dict[str, float]:
+    now = time.time()
+    result: dict[str, float] = {}
+    stale: list[str] = []
+
+    for tid in token_ids:
+        if tid in _price_cache:
+            price, fetched_at = _price_cache[tid]
+            if now - fetched_at < PRICE_CACHE_TTL:
+                result[tid] = price
+                continue
+        stale.append(tid)
+
+    if stale:
+        fresh = _fetch_midpoints(stale)
+        for tid, price in fresh.items():
+            _price_cache[tid] = (price, now)
+            result[tid] = price
+
+    return result
+
+
+@app.get("/api/prices")
+def get_prices(token_ids: str = Query(description="Comma separated token IDs")) -> dict:
+    ids = [t.strip() for t in token_ids.split(",") if t.strip()]
+    if not ids:
+        return {"prices": {}}
+    prices = _get_prices(ids)
+    return {"prices": prices}

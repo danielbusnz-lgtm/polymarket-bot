@@ -33,4 +33,12 @@ export const api = {
   stats: () => get<Stats>("/api/stats"),
 
   cron: () => get<CronInfo>("/api/cron"),
+
+  prices: async (tokenIds: string[]) => {
+    if (tokenIds.length === 0) return {}
+    const res = await get<{ prices: Record<string, number> }>(
+      `/api/prices?token_ids=${tokenIds.join(",")}`
+    )
+    return res.prices
+  },
 }

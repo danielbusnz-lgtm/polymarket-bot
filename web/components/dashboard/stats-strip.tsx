@@ -60,8 +60,10 @@ function Sparkline({
   const max = Math.max(...data)
   const range = max - min || 1
 
+  const pad = 4 // inset so endpoint dot doesn't clip the SVG edge
+
   const coords = data.map((v, i) => ({
-    x: (i / (data.length - 1)) * width,
+    x: pad + (i / (data.length - 1)) * (width - pad * 2),
     y: height - ((v - min) / range) * (height - 4) - 2,
   }))
 
@@ -69,7 +71,7 @@ function Sparkline({
 
   // Closed polygon: trace the line, then drop to bottom-right, bottom-left
   const areaPoints =
-    linePoints + ` ${width},${height} 0,${height}`
+    linePoints + ` ${coords[coords.length - 1].x},${height} ${coords[0].x},${height}`
 
   const lastPt = coords[coords.length - 1]
 
@@ -139,6 +141,8 @@ interface KpiCard {
   sparkline?: number[]
   sparklineColor?: string
   sparklineRef?: number
+  /** Threshold bar: fill is current/max, clamped to 0-1. Color follows accent. */
+  thresholdBar?: { current: number; max: number }
 }
 
 interface KpiGroup {
@@ -159,7 +163,97 @@ const ACCENT_COLOR: Record<Accent, string> = {
   green: "#22c55e",
   red: "#ef4444",
   amber: "#f59e0b",
-  neutral: "#f8fafc",
+  neutral: "#e2e8f0",
+}
+
+/* ------------------------------------------------------------------ */
+/*  Single KPI card (extracted so hooks are valid)                      */
+/* ------------------------------------------------------------------ */
+
+function KpiCardCell({
+  card,
+  showSeparator,
+}: {
+  card: KpiCard
+  showSeparator: boolean
+}) {
+  const flash = useValueFlash(card.value)
+
+  return (
+    <div
+      className={cn(
+        "flex flex-1 flex-col px-4 pb-2.5 pt-1 min-w-0",
+        showSeparator && "border-r border-[#1a1a1a]",
+        flash === "up" && "kpi-flash-up",
+        flash === "down" && "kpi-flash-down"
+      )}
+    >
+      {/* Card label */}
+      <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#64748b]">
+        {card.label}
+      </span>
+
+      {/* Value row */}
+      <div className="flex items-baseline gap-2 mt-0.5">
+        <span
+          className={cn(
+            "text-2xl font-semibold font-mono leading-none tabular-nums tracking-tight",
+            card.accent === "neutral" ? "text-[#e2e8f0]" : undefined
+          )}
+          style={
+            card.accent !== "neutral"
+              ? { color: ACCENT_COLOR[card.accent] }
+              : undefined
+          }
+        >
+          {card.value}
+        </span>
+
+        {/* Delta */}
+        {card.delta && (
+          <span
+            className="text-xs font-mono tabular-nums font-medium"
+            style={{
+              color:
+                card.delta.direction === "up"
+                  ? "#22c55e"
+                  : card.delta.direction === "down"
+                    ? "#ef4444"
+                    : "#64748b",
+            }}
+          >
+            {card.delta.direction === "up" && "▲ "}
+            {card.delta.direction === "down" && "▼ "}
+            {card.delta.value}
+          </span>
+        )}
+      </div>
+
+      {/* Sparkline */}
+      {card.sparkline && card.sparkline.length >= 2 && (
+        <Sparkline
+          data={card.sparkline}
+          color={card.sparklineColor ?? ACCENT_COLOR[card.accent]}
+          refValue={card.sparklineRef}
+        />
+      )}
+
+      {/* Threshold bar */}
+      {card.thresholdBar && (
+        <div className="mt-auto pt-2">
+          <div className="h-[3px] w-full bg-[#1e293b] overflow-hidden">
+            <div
+              className="h-full transition-all duration-500 ease-out"
+              style={{
+                width: `${Math.min(1, Math.max(0, card.thresholdBar.current / card.thresholdBar.max)) * 100}%`,
+                backgroundColor: ACCENT_COLOR[card.accent],
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -193,65 +287,11 @@ export function StatsStrip({ groups, className }: StatsStripProps) {
             {/* Cards row */}
             <div className="flex flex-1 min-w-0">
               {group.cards.map((card, ci) => (
-                <div
+                <KpiCardCell
                   key={card.label}
-                  className={cn(
-                    "flex flex-1 flex-col px-4 pb-2.5 pt-1 min-w-0",
-                    ci < group.cards.length - 1 && "border-r border-[#1a1a1a]"
-                  )}
-                >
-                  {/* Card label */}
-                  <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#64748b]">
-                    {card.label}
-                  </span>
-
-                  {/* Value row */}
-                  <div className="flex items-baseline gap-2 mt-0.5">
-                    <span
-                      className={cn(
-                        "text-[1.35rem] font-semibold font-mono leading-none tabular-nums tracking-tight",
-                        card.accent === "neutral"
-                          ? "text-[#f8fafc]"
-                          : undefined
-                      )}
-                      style={
-                        card.accent !== "neutral"
-                          ? { color: ACCENT_COLOR[card.accent] }
-                          : undefined
-                      }
-                    >
-                      {card.value}
-                    </span>
-
-                    {/* Delta */}
-                    {card.delta && (
-                      <span
-                        className="text-xs font-mono tabular-nums font-medium"
-                        style={{
-                          color:
-                            card.delta.direction === "up"
-                              ? "#22c55e"
-                              : card.delta.direction === "down"
-                                ? "#ef4444"
-                                : "#64748b",
-                        }}
-                      >
-                        {card.delta.direction === "up" && "▲ "}
-                        {card.delta.direction === "down" && "▼ "}
-                        {card.delta.value}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Sparkline */}
-                  {card.sparkline && card.sparkline.length >= 2 && (
-                    <Sparkline
-                      data={card.sparkline}
-                      color={card.sparklineColor ?? ACCENT_COLOR[card.accent]}
-                      refValue={card.sparklineRef}
-                    />
-                  )}
-                </div>
+                  card={card}
+                  showSeparator={ci < group.cards.length - 1}
+                />
               ))}
             </div>
           </div>
