@@ -158,7 +158,6 @@ export default function DashboardLayout({
   return (
     <div className="flex min-h-screen flex-col">
       <TopBar
-        isRunning={true}
         isPaperMode={isPaperMode}
         onModeToggle={setIsPaperMode}
       />

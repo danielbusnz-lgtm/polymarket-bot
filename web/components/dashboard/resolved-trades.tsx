@@ -52,15 +52,9 @@ function generateVotes(trade: Trade, index: number): VoteData {
   }
 }
 
-interface Trade {
-  run_at: string
-  question: string
-  direction: string
-  price: number
-  edge: number
-  avg_prob: number
-  correct: number | null
-}
+import type { Signal } from "@/lib/types"
+
+type Trade = Signal
 
 interface ResolvedTradesProps {
   trades: Trade[]
