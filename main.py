@@ -1,5 +1,5 @@
 def main():
-    print("Hello from polymarket-bot!")
+    print("Hello from signum!")
 
 
 if __name__ == "__main__":

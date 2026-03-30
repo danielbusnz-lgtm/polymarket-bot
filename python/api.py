@@ -12,11 +12,11 @@ PAPER_TRADES_DB_PATH = os.environ.get("PAPER_TRADES_DB_PATH", "paper_trades.db")
 
 CRON_INTERVAL_SECONDS = 6 * 3600
 
-app = FastAPI(title="Polymarket Bot Dashboard API")
+app = FastAPI(title="Signum Dashboard API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(","),
     allow_methods=["GET"],
     allow_headers=["*"],
 )

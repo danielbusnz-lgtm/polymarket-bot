@@ -1,10 +1,11 @@
 <!-- Badges -->
-![Python](https://img.shields.io/badge/python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Rust](https://img.shields.io/badge/rust-1.77-DEA584?style=flat-square&logo=rust&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)
 ![gRPC](https://img.shields.io/badge/gRPC-tonic-4285F4?style=flat-square&logo=google&logoColor=white)
-![SQLite](https://img.shields.io/badge/SQLite-paper_trades-003B57?style=flat-square&logo=sqlite&logoColor=white)
+![License](https://img.shields.io/github/license/danielbusnz-lgtm/signum?style=flat-square)
 
-# polymarket-bot
+# signum
 
 Autonomous prediction market trading on Polymarket. Uses multi-LLM consensus to find mispriced markets and executes orders through a Rust engine with EIP-712 signing.
 
@@ -87,7 +88,7 @@ Defined in `proto/trader.proto`. Python sends an `OrderRequest` (market_id, outc
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.13+
 - Rust toolchain (cargo)
 - A Polymarket account with API credentials
 - API keys for: Anthropic, OpenAI, Google AI, xAI, DeepSeek, Tavily
@@ -95,17 +96,22 @@ Defined in `proto/trader.proto`. Python sends an `OrderRequest` (market_id, outc
 ### Setup
 
 ```bash
-git clone https://github.com/danielbusnz-lgtm/polymarket-bot
-cd polymarket-bot
+git clone https://github.com/danielbusnz-lgtm/signum
+cd signum
 ```
 
-**Python:**
+**Python** (uses [uv](https://docs.astral.sh/uv/)):
 
 ```bash
-cd python
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+uv sync
+```
+
+Or with pip:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install .
 ```
 
 **Rust:**
@@ -115,20 +121,20 @@ cd rust
 cargo build
 ```
 
-Create a `.env` file in the project root:
+**Web dashboard:**
 
+```bash
+cd web
+pnpm install
 ```
-PRIVATE_KEY=your_polygon_wallet_private_key
-POLYMARKET_API_KEY=your_polymarket_api_key
-POLYMARKET_SECRET=your_polymarket_secret
-POLYMARKET_PASSPHRASE=your_polymarket_passphrase
-ANTHROPIC_API_KEY=
-OPENAI_API_KEY=
-GOOGLE_API_KEY=
-XAI_API_KEY=
-DEEPSEEK_API_KEY=
-TAVILY_API_KEY=
+
+Copy `.env.example` to `.env` and fill in your keys:
+
+```bash
+cp .env.example .env
 ```
+
+You need API keys for Polymarket (wallet + API credentials), all five LLM providers (Anthropic, OpenAI, Google, xAI, DeepSeek), and Tavily for news context. See `.env.example` for the full list.
 
 ### Paper Trading
 
@@ -155,7 +161,7 @@ cd rust && cargo run
 cd python && python3 paper_trade.py run
 ```
 
-### Dashboard
+### TUI Dashboard
 
 ```bash
 cd rust
@@ -164,11 +170,30 @@ cargo run --bin dashboard
 
 `Tab` to switch between Live / Paper / Demo views. `q` to quit. Shows a portfolio value chart, open positions table, and countdown to the next cron run.
 
+### Web Dashboard
+
+```bash
+# Terminal 1: Start the API server
+cd python && uvicorn api:app --port 8888
+
+# Terminal 2: Start the Next.js frontend
+cd web && pnpm dev
+```
+
+Open `http://localhost:3000`. The dashboard shows an equity curve, open positions with live prices, KPI strip (win rate, Sharpe, drawdown), and an analytics page with calibration charts and model health.
+
+For production, use Docker:
+
+```bash
+docker build -f Dockerfile.api -t signum-api .
+docker build -f Dockerfile.web --build-arg NEXT_PUBLIC_API_URL=http://your-api:8888 -t signum-web .
+```
+
 ### Cron Automation
 
 ```bash
 # Run every 6 hours
-0 */6 * * * cd /path/to/polymarket-bot && bash run_paper_trade.sh >> logs/paper_trade.log 2>&1
+0 */6 * * * cd /path/to/signum && bash run_paper_trade.sh >> logs/paper_trade.log 2>&1
 ```
 
 ## Project Structure
@@ -177,28 +202,28 @@ cargo run --bin dashboard
 ├── python/
 │   ├── paper_trade.py           # Main CLI (run, report, resolve)
 │   ├── funnel.py                # Market candidate filtering
+│   ├── strategies/llm.py        # Multi-LLM consensus engine
+│   ├── api.py                   # FastAPI backend for web dashboard
 │   ├── client.py                # CLOB client init
-│   ├── whale_finder.py          # Whale wallet analysis (experimental)
-│   ├── strategies/
-│   │   └── llm.py               # Multi-LLM consensus engine
-│   └── proto/
-│       ├── trader_pb2.py        # Generated protobuf messages
-│       └── trader_pb2_grpc.py   # Generated gRPC stubs
+│   ├── seed_mock_data.py        # Generate mock data for development
+│   └── proto/                   # Generated gRPC stubs
 ├── rust/
 │   ├── src/
 │   │   ├── main.rs              # gRPC server + heartbeat
 │   │   ├── executor.rs          # EIP-712 signing + order placement
 │   │   ├── ws.rs                # WebSocket (experimental)
-│   │   └── bin/
-│   │       └── dashboard.rs     # Ratatui TUI dashboard
+│   │   └── bin/dashboard.rs     # Ratatui TUI dashboard
 │   ├── Cargo.toml
 │   └── build.rs                 # Proto compilation
-├── proto/
-│   └── trader.proto             # gRPC service definition
+├── web/                         # Next.js 16 dashboard
+│   ├── app/(dashboard)/         # Dashboard + analytics pages
+│   ├── components/dashboard/    # Equity curve, positions, charts
+│   └── lib/                     # API client, hooks, metrics
+├── proto/trader.proto           # gRPC service definition
+├── Dockerfile.api               # Python API container
+├── Dockerfile.web               # Next.js container
 ├── run_paper_trade.sh           # Cron runner script
-├── migrate_signals.py           # DB schema migration
-├── .env.example
-└── README.md
+└── .env.example
 ```
 
 ## Disclaimer

@@ -2,7 +2,7 @@
 # Runs the paper trade pipeline and logs output.
 # Called by crontab — runs twice daily.
 
-PROJECT="/home/python/Projects/personal/polymarket-bot"
+PROJECT="/home/dan/Projects/Personal/signum"
 LOG="$PROJECT/logs/paper_trade.log"
 
 mkdir -p "$PROJECT/logs"

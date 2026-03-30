@@ -1,7 +1,7 @@
 [project]
-name = "polymarket-bot"
+name = "signum"
 version = "0.1.0"
-description = "Add your description here"
+description = "Autonomous prediction market trading bot using multi-LLM consensus"
 requires-python = ">=3.13"
 dependencies = [
     "anthropic>=0.86.0",
