@@ -1,12 +1,6 @@
-import os
 import json
 import requests
 from datetime import datetime, timezone, timedelta
-from dotenv import load_dotenv
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import ApiCreds
-
-load_dotenv()
 
 # --- Config ---
 MAX_CANDIDATES    = 20
@@ -17,17 +11,6 @@ MAX_DAYS_TO_CLOSE = 30      # near-term only — more price movement as resoluti
 MIN_VOLUME        = 5000    # minimum $5k 24hr volume — avoid illiquid traps
 
 
-def get_client() -> ClobClient:
-    return ClobClient(
-        "https://clob.polymarket.com",
-        key=os.getenv("PRIVATE_KEY"),
-        chain_id=137,
-        creds=ApiCreds(
-            api_key=os.getenv("POLYMARKET_API_KEY"),
-            api_secret=os.getenv("POLYMARKET_SECRET"),
-            api_passphrase=os.getenv("POLYMARKET_PASSPHRASE"),
-        ),
-    )
 
 def fetch_candidates() -> list[dict]:
     now = datetime.now(timezone.utc)

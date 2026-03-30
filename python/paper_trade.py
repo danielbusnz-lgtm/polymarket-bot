@@ -1,15 +1,33 @@
 import asyncio
+import json
+import os
 import sqlite3
 import argparse
+import time
 from datetime import datetime, timezone
+
+import requests
 
 from funnel import fetch_candidates
 from strategies.llm import filter_politics, tier1_screen, tier2_analyze
 
-DB_PATH = "paper_trades.db"
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..")
+SIGNALS_DB_PATH = os.path.join(_PROJECT_ROOT, "paper_trades.db")
+BOT_DB_PATH = os.path.join(_PROJECT_ROOT, "bot.db")
+TRADE_SIZE = float(os.getenv("TRADE_SIZE", "10"))
+GAMMA_API = "https://gamma-api.polymarket.com"
+
+# ---------------------------------------------------------------------------
+# Database helpers — signals (paper_trades.db)
+# ---------------------------------------------------------------------------
+
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(SIGNALS_DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -28,20 +46,19 @@ def init_db() -> None:
                 edge          REAL    NOT NULL,
                 avg_prob      REAL    NOT NULL,
                 disagreement  REAL    NOT NULL,
-                live          INTEGER DEFAULT 0,   -- 1 = real order placed
-                order_id      TEXT,                -- Polymarket order ID
-                fill_price    REAL,                -- actual fill price
+                live          INTEGER DEFAULT 0,
+                order_id      TEXT,
+                fill_price    REAL,
                 resolved      INTEGER DEFAULT 0,
                 outcome       TEXT,
                 correct       INTEGER
             )
         """)
         conn.commit()
-        _migrate(conn)
+        _migrate_signals(conn)
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Add new columns to existing DBs without breaking them."""
+def _migrate_signals(conn: sqlite3.Connection) -> None:
     existing = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
     migrations = {
         "token_id":   "ALTER TABLE signals ADD COLUMN token_id  TEXT NOT NULL DEFAULT ''",
@@ -53,6 +70,71 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if col not in existing:
             conn.execute(sql)
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Database helpers — bot state (bot.db)
+# ---------------------------------------------------------------------------
+
+
+def get_bot_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(BOT_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_bot_db() -> None:
+    with get_bot_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                value     REAL NOT NULL,
+                is_paper  INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS positions (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                title         TEXT NOT NULL,
+                direction     TEXT NOT NULL,
+                amount_in     REAL NOT NULL,
+                current_value REAL NOT NULL,
+                our_prob      REAL NOT NULL,
+                market_prob   REAL NOT NULL,
+                opened_at     REAL NOT NULL,
+                is_paper      INTEGER NOT NULL DEFAULT 0,
+                token_id      TEXT NOT NULL DEFAULT '',
+                entry_price   REAL NOT NULL DEFAULT 0,
+                market_id     TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cron_runs (
+                id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                ran_at REAL NOT NULL
+            )
+        """)
+        conn.commit()
+        _migrate_positions(conn)
+
+
+def _migrate_positions(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(positions)")}
+    migrations = {
+        "token_id":    "ALTER TABLE positions ADD COLUMN token_id    TEXT NOT NULL DEFAULT ''",
+        "entry_price": "ALTER TABLE positions ADD COLUMN entry_price REAL NOT NULL DEFAULT 0",
+        "market_id":   "ALTER TABLE positions ADD COLUMN market_id   TEXT NOT NULL DEFAULT ''",
+    }
+    for col, sql in migrations.items():
+        if col not in existing:
+            conn.execute(sql)
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Signal logging
+# ---------------------------------------------------------------------------
 
 
 def log_signal(signal: dict) -> int:
@@ -78,13 +160,12 @@ def log_signal(signal: dict) -> int:
 
 
 def mark_live(signal_id: int, order_id: str, fill_price: float | None = None) -> None:
-    """Record that a real order was placed for this signal."""
     with get_conn() as conn:
         conn.execute("""
             UPDATE signals SET live = 1, order_id = ?, fill_price = ? WHERE id = ?
         """, (order_id, fill_price, signal_id))
         conn.commit()
-    print(f"Signal {signal_id} marked LIVE — order_id={order_id}")
+    print(f"  Signal {signal_id} marked LIVE — order_id={order_id}")
 
 
 def resolve_signal(signal_id: int, outcome: str) -> None:
@@ -98,7 +179,219 @@ def resolve_signal(signal_id: int, outcome: str) -> None:
             UPDATE signals SET resolved = 1, outcome = ?, correct = ? WHERE id = ?
         """, (outcome, correct, signal_id))
         conn.commit()
-    print(f"Signal {signal_id}: direction={row['direction']} outcome={outcome} → {'WIN' if correct else 'LOSS'}")
+    print(f"  Signal {signal_id}: direction={row['direction']} outcome={outcome} -> {'WIN' if correct else 'LOSS'}")
+
+
+# ---------------------------------------------------------------------------
+# Position tracking (bot.db)
+# ---------------------------------------------------------------------------
+
+
+def write_position(signal: dict, is_paper: bool) -> None:
+    with get_bot_conn() as conn:
+        conn.execute("""
+            INSERT INTO positions
+                (title, direction, amount_in, current_value, our_prob, market_prob,
+                 opened_at, is_paper, token_id, entry_price, market_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            signal["question"],
+            signal["direction"],
+            TRADE_SIZE,
+            TRADE_SIZE,
+            signal["avg_prob"],
+            signal["price"],
+            time.time(),
+            1 if is_paper else 0,
+            signal.get("token_id", ""),
+            signal["price"],
+            signal["market_id"],
+        ))
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Price updater + portfolio snapshots
+# ---------------------------------------------------------------------------
+
+
+def update_prices() -> None:
+    conn = get_bot_conn()
+    positions = conn.execute("SELECT * FROM positions").fetchall()
+    if not positions:
+        conn.close()
+        return
+
+    token_ids = [p["token_id"] for p in positions if p["token_id"]]
+    if not token_ids:
+        conn.close()
+        return
+
+    # Batch fetch current midpoints
+    prices = _fetch_midpoints(token_ids)
+
+    now = time.time()
+    live_value = 0.0
+    paper_value = 0.0
+
+    for p in positions:
+        tid = p["token_id"]
+        if tid not in prices or p["entry_price"] <= 0:
+            if p["is_paper"]:
+                paper_value += p["current_value"]
+            else:
+                live_value += p["current_value"]
+            continue
+
+        current_price = prices[tid]
+        new_value = p["amount_in"] * (current_price / p["entry_price"])
+
+        conn.execute("""
+            UPDATE positions SET current_value = ?, market_prob = ? WHERE id = ?
+        """, (round(new_value, 2), current_price, p["id"]))
+
+        if p["is_paper"]:
+            paper_value += new_value
+        else:
+            live_value += new_value
+
+    # Write portfolio snapshots
+    if live_value > 0:
+        conn.execute(
+            "INSERT INTO portfolio_snapshots (timestamp, value, is_paper) VALUES (?, ?, 0)",
+            (now, round(live_value, 2)),
+        )
+    if paper_value > 0:
+        conn.execute(
+            "INSERT INTO portfolio_snapshots (timestamp, value, is_paper) VALUES (?, ?, 1)",
+            (now, round(paper_value, 2)),
+        )
+
+    conn.commit()
+    conn.close()
+    print(f"Prices updated: live=${live_value:.2f}  paper=${paper_value:.2f}")
+
+
+def _fetch_midpoints(token_ids: list[str]) -> dict[str, float]:
+    import httpx
+    payload = [{"token_id": tid} for tid in set(token_ids)]
+    try:
+        resp = httpx.post("https://clob.polymarket.com/midpoints", json=payload, timeout=10.0)
+        resp.raise_for_status()
+        data = resp.json()
+        return {tid: float(data[tid]) for tid in data if data[tid]}
+    except Exception as e:
+        print(f"  [WARN] Failed to fetch midpoints: {e}")
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Auto-resolve
+# ---------------------------------------------------------------------------
+
+
+def auto_resolve() -> None:
+    conn = get_conn()
+    unresolved = conn.execute(
+        "SELECT id, market_id, direction FROM signals WHERE resolved = 0"
+    ).fetchall()
+    conn.close()
+
+    if not unresolved:
+        return
+
+    # Group signals by market_id
+    market_signals: dict[str, list[dict]] = {}
+    for row in unresolved:
+        mid = row["market_id"]
+        if mid not in market_signals:
+            market_signals[mid] = []
+        market_signals[mid].append(dict(row))
+
+    resolved_count = 0
+    for market_id, signals in market_signals.items():
+        winner = _check_resolution(market_id)
+        if winner is None:
+            continue
+
+        outcome = winner.upper()  # "Yes" -> "YES", "No" -> "NO"
+        for sig in signals:
+            resolve_signal(sig["id"], outcome)
+            resolved_count += 1
+
+        # Remove resolved positions from bot.db
+        bot_conn = get_bot_conn()
+        bot_conn.execute("DELETE FROM positions WHERE market_id = ?", (market_id,))
+        bot_conn.commit()
+        bot_conn.close()
+
+    if resolved_count:
+        print(f"Auto-resolved {resolved_count} signals")
+
+
+def _check_resolution(market_id: str) -> str | None:
+    try:
+        resp = requests.get(
+            f"{GAMMA_API}/markets",
+            params={"condition_id": market_id},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        markets = resp.json()
+        if not markets:
+            return None
+
+        market = markets[0]
+        if not market.get("closed"):
+            return None
+
+        outcomes = json.loads(market.get("outcomes", "[]"))
+        prices = json.loads(market.get("outcomePrices", "[]"))
+
+        winner = next(
+            (outcomes[i] for i, p in enumerate(prices) if float(p) == 1.0),
+            None,
+        )
+        return winner
+    except Exception as e:
+        print(f"  [WARN] Resolution check failed for {market_id[:12]}...: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Live order placement
+# ---------------------------------------------------------------------------
+
+
+def place_order(signal: dict) -> str | None:
+    from client import get_client
+    from py_clob_client.clob_types import OrderArgs
+    from py_clob_client.order_builder.constants import BUY
+
+    client = get_client()
+    token_id = signal["token_id"]
+    price = signal["price"]
+    size = round(TRADE_SIZE / price, 2)
+
+    try:
+        order_args = OrderArgs(
+            token_id=token_id,
+            price=price,
+            size=size,
+            side=BUY,
+        )
+        resp = client.create_and_post_order(order_args)
+        order_id = resp.get("orderID", "")
+        print(f"  Order placed: {order_id}  size={size} shares @ {price}")
+        return order_id
+    except Exception as e:
+        print(f"  [ERROR] Order placement failed: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
 
 
 def show_report() -> None:
@@ -154,9 +447,28 @@ def show_report() -> None:
         print()
 
 
-async def run_pipeline() -> None:
-    init_db()
+# ---------------------------------------------------------------------------
+# Pipeline
+# ---------------------------------------------------------------------------
 
+
+async def run_pipeline(live: bool = False) -> None:
+    init_db()
+    init_bot_db()
+
+    # Log this cron run
+    with get_bot_conn() as conn:
+        conn.execute("INSERT INTO cron_runs (ran_at) VALUES (?)", (time.time(),))
+        conn.commit()
+
+    # Housekeeping: resolve closed markets, update prices
+    print("Checking for resolved markets...")
+    auto_resolve()
+
+    print("Updating position prices...")
+    update_prices()
+
+    # Funnel
     candidates = fetch_candidates()
     if not candidates:
         print("No candidates found.")
@@ -180,20 +492,38 @@ async def run_pipeline() -> None:
     print(f"TRADE SIGNALS: {len(trades)} found")
     print(f"{'='*60}")
 
+    is_paper = not live
+
     for t in trades:
         row_id = log_signal(t)
         print(f"\n  [{row_id}] {t['direction']} {t['question'][:70]}")
         print(f"       Price: {t['price']:.2f}  Edge: {t['edge']:.2f}  Avg prob: {t['avg_prob']:.2f}")
 
+        # Write position to bot.db
+        write_position(t, is_paper)
+
+        # Place real order if live
+        if live:
+            order_id = place_order(t)
+            if order_id:
+                mark_live(row_id, order_id)
+
     if not trades:
         print("  None — check back next run.")
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Polymarket paper trading")
+    parser = argparse.ArgumentParser(description="Signum paper/live trading")
     sub = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("run",    help="Run pipeline and log signals")
+    run_parser = sub.add_parser("run", help="Run pipeline and log signals")
+    run_parser.add_argument("--live", action="store_true", help="Place real orders on Polymarket")
+
     sub.add_parser("report", help="Print calibration report")
 
     res = sub.add_parser("resolve", help="Mark a signal resolved")
@@ -203,7 +533,10 @@ def main():
     args = parser.parse_args()
 
     if args.cmd == "run" or args.cmd is None:
-        asyncio.run(run_pipeline())
+        live = getattr(args, "live", False)
+        if live:
+            print("*** LIVE MODE — real orders will be placed ***\n")
+        asyncio.run(run_pipeline(live=live))
     elif args.cmd == "report":
         init_db()
         show_report()
