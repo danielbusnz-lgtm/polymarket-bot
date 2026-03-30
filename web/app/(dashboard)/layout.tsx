@@ -14,9 +14,11 @@ export default function DashboardLayout({
   const [isPaperMode, setIsPaperMode] = useState(true)
   const mode = isPaperMode ? "paper" : "live"
 
-  const { data: statsData } = useStats()
-  const { data: snapshots } = useSnapshots(mode as "live" | "paper")
+  const { data: statsData, isLoading: statsLoading } = useStats()
+  const { data: snapshots, isLoading: snapshotsLoading } = useSnapshots(mode as "live" | "paper")
   const { data: allSignals } = useSignals("all")
+
+  const isLoading = statsLoading || snapshotsLoading
 
   // Compute NAV and daily P&L from snapshots
   const latestValue = snapshots?.length
@@ -154,6 +156,17 @@ export default function DashboardLayout({
       ],
     },
   ]
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen flex-col">
+        <TopBar isPaperMode={isPaperMode} onModeToggle={setIsPaperMode} />
+        <div className="flex-1 flex items-center justify-center text-zinc-500">
+          Loading...
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex min-h-screen flex-col">
