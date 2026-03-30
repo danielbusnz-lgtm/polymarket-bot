@@ -70,7 +70,7 @@ def test_google() -> tuple[bool, str]:
         from google import genai
         client = genai.Client(api_key=key)
         resp = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents="Say 'ok'",
         )
         return True, "Gemini working"
@@ -86,7 +86,7 @@ def test_xai() -> tuple[bool, str]:
         from openai import OpenAI
         client = OpenAI(api_key=key, base_url="https://api.x.ai/v1")
         resp = client.chat.completions.create(
-            model="grok-2",
+            model="grok-3",
             max_tokens=10,
             messages=[{"role": "user", "content": "Say 'ok'"}],
         )
@@ -148,7 +148,9 @@ def test_polymarket() -> tuple[bool, str]:
         from client import get_client
         client = get_client()
         # Just check that client initializes (no API call)
-        return True, f"Polymarket client initialized (wallet: {client.funder[:10]}...)"
+        # Get wallet address from the signer
+        addr = client.signer.address() if hasattr(client, 'signer') else "connected"
+        return True, f"Polymarket client initialized ({addr[:16]}...)" if isinstance(addr, str) and len(addr) > 16 else f"Polymarket client initialized"
     except Exception as e:
         return False, f"Polymarket error: {e}"
 
