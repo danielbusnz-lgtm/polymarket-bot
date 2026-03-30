@@ -172,11 +172,10 @@ cd web && pnpm dev
 
 Open `http://localhost:3000`. The dashboard shows an equity curve, open positions with live prices, KPI strip (win rate, Sharpe, drawdown), and an analytics page with calibration charts and model health.
 
-For production, use Docker:
+Or run everything with Docker Compose:
 
 ```bash
-docker build -f Dockerfile.api -t signum-api .
-docker build -f Dockerfile.web --build-arg NEXT_PUBLIC_API_URL=http://your-api:8888 -t signum-web .
+docker compose up --build
 ```
 
 ### Cron Automation

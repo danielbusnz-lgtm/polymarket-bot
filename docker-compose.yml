@@ -1,0 +1,26 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8888:8888"
+    volumes:
+      - data:/data
+    env_file: .env
+    environment:
+      - CORS_ORIGINS=http://localhost:3000
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8888
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  data:
