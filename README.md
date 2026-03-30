@@ -62,7 +62,6 @@ Python handles the slow layer (LLM analysis, market scanning). Rust handles the 
 |------|---------|
 | `executor.rs` | EIP-712 order signing, HMAC-SHA256 L2 auth, tick size snapping, USDC math |
 | `main.rs` | gRPC server on port 50051, heartbeat loop (5s keepalive) |
-| `bin/dashboard.rs` | Ratatui TUI with portfolio chart, positions table, cron countdown |
 | `ws.rs` | WebSocket subscription (experimental) |
 
 ### gRPC Bridge
@@ -80,7 +79,7 @@ Defined in `proto/trader.proto`. Python sends an `OrderRequest` (market_id, outc
 | L2 auth | HMAC-SHA256 (timestamp + method + path + body) |
 | Order execution | Rust, reqwest, Polymarket CLOB REST API |
 | gRPC bridge | tonic 0.12 (Rust) + protobuf stubs (Python) |
-| Dashboard | Ratatui 0.29, crossterm, rusqlite |
+| Web dashboard | Next.js 16, Tailwind, Recharts, TradingView Lightweight Charts |
 | Database | SQLite (signals, positions, portfolio snapshots) |
 | Scheduling | Cron (every 6 hours) |
 
@@ -161,15 +160,6 @@ cd rust && cargo run
 cd python && python3 paper_trade.py run
 ```
 
-### TUI Dashboard
-
-```bash
-cd rust
-cargo run --bin dashboard
-```
-
-`Tab` to switch between Live / Paper / Demo views. `q` to quit. Shows a portfolio value chart, open positions table, and countdown to the next cron run.
-
 ### Web Dashboard
 
 ```bash
@@ -211,8 +201,7 @@ docker build -f Dockerfile.web --build-arg NEXT_PUBLIC_API_URL=http://your-api:8
 │   ├── src/
 │   │   ├── main.rs              # gRPC server + heartbeat
 │   │   ├── executor.rs          # EIP-712 signing + order placement
-│   │   ├── ws.rs                # WebSocket (experimental)
-│   │   └── bin/dashboard.rs     # Ratatui TUI dashboard
+│   │   └── ws.rs                # WebSocket (experimental)
 │   ├── Cargo.toml
 │   └── build.rs                 # Proto compilation
 ├── web/                         # Next.js 16 dashboard
