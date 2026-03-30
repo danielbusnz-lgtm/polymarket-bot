@@ -1,9 +1,9 @@
 <!-- Badges -->
-![Python](https://img.shields.io/badge/python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)
-![Rust](https://img.shields.io/badge/rust-1.77-DEA584?style=flat-square&logo=rust&logoColor=white)
-![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)
-![gRPC](https://img.shields.io/badge/gRPC-tonic-4285F4?style=flat-square&logo=google&logoColor=white)
-![License](https://img.shields.io/github/license/danielbusnz-lgtm/signum?style=flat-square)
+[![Python](https://img.shields.io/badge/python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Rust](https://img.shields.io/badge/rust-1.77-DEA584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
+[![gRPC](https://img.shields.io/badge/gRPC-tonic-4285F4?style=flat-square&logo=google&logoColor=white)](https://github.com/hyperium/tonic)
+[![License](https://img.shields.io/github/license/danielbusnz-lgtm/signum?style=flat-square)](LICENSE)
 
 # signum
 
