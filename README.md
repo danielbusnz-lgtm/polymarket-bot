@@ -1,13 +1,11 @@
 <!-- Badges -->
 [![Python](https://img.shields.io/badge/python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Rust](https://img.shields.io/badge/rust-1.77-DEA584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
-[![gRPC](https://img.shields.io/badge/gRPC-tonic-4285F4?style=flat-square&logo=google&logoColor=white)](https://github.com/hyperium/tonic)
 [![License](https://img.shields.io/github/license/danielbusnz-lgtm/signum?style=flat-square)](LICENSE)
 
 # signum
 
-Autonomous prediction market trading on Polymarket. Uses multi-LLM consensus to find mispriced markets and executes orders through a Rust engine with EIP-712 signing.
+Autonomous prediction market trading on Polymarket. Uses multi-LLM consensus to find mispriced markets and executes orders via the Polymarket CLOB API.
 
 **Paper trading: 6,841 signals logged, 65% win rate on resolved trades.**
 
@@ -22,21 +20,21 @@ Prediction markets price events as probabilities, but they're often wrong on pol
 3. **Tier 1 screen**: Claude picks the top 5 markets worth analyzing
 4. **Tier 2 analysis**: 5 LLMs independently estimate the true probability, with fresh news context from Tavily
 5. **Signal**: If consensus edge >= 12% and disagreement <= 15%, log a trade signal
-6. **Execution**: Signal goes over gRPC to the Rust executor, which signs and submits to Polymarket's CLOB
+6. **Execution**: Order placed via py-clob-client to Polymarket's CLOB
 
 See the [architecture diagram](#architecture) below for the full pipeline.
 
 ## LLM Consensus Engine
 
-Five models vote independently on each market:
+Five models vote independently on each market (minimum 3 required):
 
-| Model | Provider |
-|-------|----------|
-| Claude Opus | Anthropic |
-| GPT-4o | OpenAI |
-| Gemini 2.5 Flash | Google |
-| Grok-3 | xAI |
-| DeepSeek Reasoner | DeepSeek |
+| Model | Provider | Required |
+|-------|----------|----------|
+| Claude Opus | Anthropic | Yes |
+| GPT-4o | OpenAI | No |
+| Gemini 2.5 Flash | Google | No |
+| Grok-3 | xAI | No |
+| DeepSeek Reasoner | DeepSeek | No |
 
 The highest and lowest estimates are dropped. The middle three are averaged to produce the consensus probability. A signal fires when this consensus diverges from the market price by at least 12 percentage points, with less than 15% disagreement among models.
 
@@ -44,9 +42,7 @@ The highest and lowest estimates are dropped. The middle three are averaged to p
 
 ![Architecture Diagram](diagrams/architecture.png)
 
-Python handles the slow layer (LLM analysis, market scanning). Rust handles the fast layer (order execution, cryptographic signing, WebSocket feeds). They talk over gRPC.
-
-### Python Strategy Layer
+### Python Files
 
 | File | Purpose |
 |------|---------|
@@ -54,19 +50,8 @@ Python handles the slow layer (LLM analysis, market scanning). Rust handles the 
 | `strategies/llm.py` | Multi-LLM consensus analysis (Tier 1 screen + Tier 2 deep analysis) |
 | `paper_trade.py` | CLI for paper trading: run pipeline, view reports, resolve signals |
 | `client.py` | Polymarket CLOB client initialization |
-| `whale_finder.py` | Whale wallet analysis (experimental, not integrated) |
-
-### Rust Execution Layer
-
-| File | Purpose |
-|------|---------|
-| `executor.rs` | EIP-712 order signing, HMAC-SHA256 L2 auth, tick size snapping, USDC math |
-| `main.rs` | gRPC server on port 50051, heartbeat loop (5s keepalive) |
-| `ws.rs` | WebSocket subscription (experimental) |
-
-### gRPC Bridge
-
-Defined in `proto/trader.proto`. Python sends an `OrderRequest` (market_id, outcome, price, size, tick_size, neg_risk) and gets back an `OrderResponse` (success, order_id, message).
+| `api.py` | FastAPI backend for web dashboard |
+| `check_setup.py` | Validate your credentials before running |
 
 ## Stack
 
@@ -75,10 +60,7 @@ Defined in `proto/trader.proto`. Python sends an `OrderRequest` (market_id, outc
 | Market data | Polymarket Gamma API, py-clob-client |
 | LLM analysis | Claude, GPT-4o, Gemini, Grok, DeepSeek |
 | News context | Tavily search API |
-| Order signing | EIP-712 via alloy-rs |
-| L2 auth | HMAC-SHA256 (timestamp + method + path + body) |
-| Order execution | Rust, reqwest, Polymarket CLOB REST API |
-| gRPC bridge | tonic 0.12 (Rust) + protobuf stubs (Python) |
+| Order execution | py-clob-client (EIP-712 signing built-in) |
 | Web dashboard | Next.js 16, Tailwind, Recharts, TradingView Lightweight Charts |
 | Database | SQLite (signals, positions, portfolio snapshots) |
 | Scheduling | Cron (every 6 hours) |
@@ -89,9 +71,9 @@ Defined in `proto/trader.proto`. Python sends an `OrderRequest` (market_id, outc
 
 - Python 3.13+ and [uv](https://docs.astral.sh/uv/) (or pip)
 - [Node.js 22+](https://nodejs.org/) and [pnpm](https://pnpm.io/) (for the web dashboard)
-- Rust toolchain (only needed for live execution)
-- A Polymarket account with API credentials
-- API keys for: Anthropic, OpenAI, Google AI, xAI, DeepSeek, Tavily
+- A Polymarket account with API credentials (see [Polymarket Setup](#polymarket-setup))
+- API keys for at least 3 LLM providers (Anthropic required, plus 2 others)
+- Tavily API key for news context
 
 ### Setup
 
@@ -114,13 +96,6 @@ source .venv/bin/activate
 pip install .
 ```
 
-**Rust:**
-
-```bash
-cd rust
-cargo build
-```
-
 **Web dashboard:**
 
 ```bash
@@ -134,7 +109,16 @@ Copy `.env.example` to `.env` and fill in your keys:
 cp .env.example .env
 ```
 
-You need API keys for Polymarket (wallet + API credentials), all five LLM providers (Anthropic, OpenAI, Google, xAI, DeepSeek), and Tavily for news context. See `.env.example` for the full list.
+### Validate Setup
+
+Before running the bot, validate your credentials:
+
+```bash
+cd python
+python check_setup.py
+```
+
+This checks all API keys and shows which LLMs are available.
 
 ### Paper Trading
 
@@ -142,24 +126,25 @@ You need API keys for Polymarket (wallet + API credentials), all five LLM provid
 cd python
 
 # Run the full pipeline once and log signals to SQLite
-../.venv/bin/python paper_trade.py run
+python paper_trade.py run
 
 # View calibration report (win rate by edge bucket)
-../.venv/bin/python paper_trade.py report
+python paper_trade.py report
 
 # Mark a signal as resolved
-../.venv/bin/python paper_trade.py resolve <id> YES
+python paper_trade.py resolve <id> YES
 ```
 
-### Live Execution
+### Live Trading
 
 ```bash
-# Terminal 1: Start the Rust gRPC server
-cd rust && cargo run
+cd python
 
-# Terminal 2: Run the Python pipeline (signals auto-submit over gRPC)
-cd python && ../.venv/bin/python paper_trade.py run
+# Run with --live to place real orders
+python paper_trade.py run --live
 ```
+
+**Warning:** This places real orders with real money. Start small.
 
 ### Web Dashboard
 
@@ -173,17 +158,46 @@ cd web && pnpm dev
 
 Open `http://localhost:3000`. The dashboard shows an equity curve, open positions with live prices, KPI strip (win rate, Sharpe, drawdown), and an analytics page with calibration charts and model health.
 
-Or run everything with Docker Compose:
-
-```bash
-docker compose up --build
-```
-
 ### Cron Automation
 
 ```bash
 # Run every 6 hours
 0 */6 * * * cd /path/to/signum && bash run_paper_trade.sh >> logs/paper_trade.log 2>&1
+```
+
+## Polymarket Setup
+
+To trade on Polymarket, you need:
+
+### 1. Create a Polymarket Account
+
+1. Go to [polymarket.com](https://polymarket.com) and connect a wallet (MetaMask, Coinbase Wallet, etc.)
+2. Your wallet must be on Polygon network
+3. Deposit USDC to fund your account
+
+### 2. Get API Credentials
+
+1. Go to [polymarket.com/settings](https://polymarket.com/settings)
+2. Navigate to the API section
+3. Generate API credentials (you'll get API key, secret, and passphrase)
+4. **Important:** Save these immediately, the secret is only shown once
+
+### 3. Export Your Private Key
+
+Your wallet's private key is needed for signing orders:
+
+- **MetaMask:** Settings > Security & Privacy > Reveal Secret Recovery Phrase (then derive private key)
+- **Or:** Export from your wallet provider's settings
+
+**Never share your private key. Never commit it to git.**
+
+### 4. Fill in .env
+
+```bash
+PRIVATE_KEY=your_polygon_wallet_private_key
+POLYMARKET_API_KEY=your_api_key
+POLYMARKET_SECRET=your_base64_secret
+POLYMARKET_PASSPHRASE=your_passphrase
 ```
 
 ## Project Structure
@@ -195,22 +209,13 @@ docker compose up --build
 │   ├── strategies/llm.py        # Multi-LLM consensus engine
 │   ├── api.py                   # FastAPI backend for web dashboard
 │   ├── client.py                # CLOB client init
-│   ├── seed_mock_data.py        # Generate mock data for development
-│   └── proto/                   # Generated gRPC stubs
-├── rust/
-│   ├── src/
-│   │   ├── main.rs              # gRPC server + heartbeat
-│   │   ├── executor.rs          # EIP-712 signing + order placement
-│   │   └── ws.rs                # WebSocket (experimental)
-│   ├── Cargo.toml
-│   └── build.rs                 # Proto compilation
+│   ├── check_setup.py           # Credential validation
+│   └── seed_mock_data.py        # Generate mock data for development
 ├── web/                         # Next.js 16 dashboard
 │   ├── app/(dashboard)/         # Dashboard + analytics pages
 │   ├── components/dashboard/    # Equity curve, positions, charts
 │   └── lib/                     # API client, hooks, metrics
-├── proto/trader.proto           # gRPC service definition
-├── Dockerfile.api               # Python API container
-├── Dockerfile.web               # Next.js container
+├── diagrams/                    # Architecture diagrams
 ├── run_paper_trade.sh           # Cron runner script
 └── .env.example
 ```

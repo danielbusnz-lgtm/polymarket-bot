@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import requests
 
 from funnel import fetch_candidates
-from strategies.llm import filter_politics, tier1_screen, tier2_analyze
+from strategies.llm import filter_politics, tier1_screen, tier2_analyze, print_provider_status
 
 # ---------------------------------------------------------------------------
 # Config
@@ -453,6 +453,9 @@ def show_report() -> None:
 
 
 async def run_pipeline(live: bool = False) -> None:
+    # Validate LLM providers before starting
+    print_provider_status()
+
     init_db()
     init_bot_db()
 
