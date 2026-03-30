@@ -87,8 +87,9 @@ Defined in `proto/trader.proto`. Python sends an `OrderRequest` (market_id, outc
 
 ### Prerequisites
 
-- Python 3.13+
-- Rust toolchain (cargo)
+- Python 3.13+ and [uv](https://docs.astral.sh/uv/) (or pip)
+- [Node.js 22+](https://nodejs.org/) and [pnpm](https://pnpm.io/) (for the web dashboard)
+- Rust toolchain (only needed for live execution)
 - A Polymarket account with API credentials
 - API keys for: Anthropic, OpenAI, Google AI, xAI, DeepSeek, Tavily
 
@@ -141,13 +142,13 @@ You need API keys for Polymarket (wallet + API credentials), all five LLM provid
 cd python
 
 # Run the full pipeline once and log signals to SQLite
-python3 paper_trade.py run
+../.venv/bin/python paper_trade.py run
 
 # View calibration report (win rate by edge bucket)
-python3 paper_trade.py report
+../.venv/bin/python paper_trade.py report
 
 # Mark a signal as resolved
-python3 paper_trade.py resolve <id> YES
+../.venv/bin/python paper_trade.py resolve <id> YES
 ```
 
 ### Live Execution
@@ -157,14 +158,14 @@ python3 paper_trade.py resolve <id> YES
 cd rust && cargo run
 
 # Terminal 2: Run the Python pipeline (signals auto-submit over gRPC)
-cd python && python3 paper_trade.py run
+cd python && ../.venv/bin/python paper_trade.py run
 ```
 
 ### Web Dashboard
 
 ```bash
 # Terminal 1: Start the API server
-cd python && uvicorn api:app --port 8888
+.venv/bin/uvicorn python.api:app --port 8888
 
 # Terminal 2: Start the Next.js frontend
 cd web && pnpm dev
