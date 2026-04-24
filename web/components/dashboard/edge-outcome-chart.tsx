@@ -99,7 +99,16 @@ function getBarColor(winRate: number): string {
   return "#F23645"
 }
 
-function EdgeOutcomeBar(props: any) {
+type EdgeOutcomeBarProps = {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  payload?: { winRate: number; count: number; ciHalfWidth: number }
+  background?: { x: number; y: number; width: number; height: number }
+}
+
+function EdgeOutcomeBar(props: EdgeOutcomeBarProps) {
   const { x, y, width, height, payload, background } = props
   if (!payload || height === undefined) return null
 
@@ -107,9 +116,6 @@ function EdgeOutcomeBar(props: any) {
   const lowCount = payload.count < 5
   const barHeight = Math.max(height, 0)
   const barY = y
-
-  // CI-derived opacity: wide CI = faint, narrow CI = solid
-  const opacity = Math.max(0.15, Math.min(0.85, 1 - payload.ciHalfWidth / 30))
 
   const plotTop = background?.y ?? 0
   const plotBottom = (background?.y ?? 0) + (background?.height ?? 300)
@@ -232,9 +238,9 @@ export function EdgeOutcomeChart({ trades, className }: EdgeOutcomeChartProps) {
             />
             <XAxis
               dataKey="label"
-              tick={(props: any) => {
+              tick={(props: { x?: number; y?: number; payload: { value: string } }) => {
                 const { x, y, payload: tickPayload } = props
-                const bucket = buckets.find((b: any) => b.label === tickPayload.value)
+                const bucket = buckets.find((b) => b.label === tickPayload.value)
                 return (
                   <g>
                     <text

@@ -85,7 +85,17 @@ function computeBuckets(trades: Trade[]): DisagreementBucket[] {
   })
 }
 
-function DisagreementBar(props: any) {
+type DisagreementBarProps = {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  payload?: { winRate: number; count: number }
+  overallWinRate: number
+  background?: { x: number; y: number; width: number; height: number }
+}
+
+function DisagreementBar(props: DisagreementBarProps) {
   const { x, y, width, height, payload, overallWinRate, background } = props
   if (!payload || height === undefined) return null
 
@@ -221,9 +231,9 @@ export function DisagreementAccuracyChart({
             />
             <XAxis
               dataKey="label"
-              tick={(props: any) => {
+              tick={(props: { x?: number; y?: number; payload: { value: string } }) => {
                 const { x, y, payload: tickPayload } = props
-                const bucket = buckets.find((b: any) => b.label === tickPayload.value)
+                const bucket = buckets.find((b) => b.label === tickPayload.value)
                 return (
                   <g>
                     <text
@@ -348,8 +358,8 @@ export function DisagreementAccuracyChart({
             />
             <Bar
               dataKey="winRate"
-              shape={(props: any) => (
-                <DisagreementBar {...props} overallWinRate={overallWinRate} />
+              shape={(props: object) => (
+                <DisagreementBar {...(props as DisagreementBarProps)} overallWinRate={overallWinRate} />
               )}
               isAnimationActive={false}
               maxBarSize={56}

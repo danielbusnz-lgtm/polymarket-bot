@@ -24,6 +24,7 @@ function useValueFlash(value: string): "up" | "down" | null {
 
     if (isNaN(prevNum) || isNaN(currNum) || prevNum === currNum) return
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: animated flash on prop change
     setFlash(currNum > prevNum ? "up" : "down")
 
     if (timerRef.current) clearTimeout(timerRef.current)

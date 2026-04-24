@@ -118,7 +118,7 @@ export function CalibrationChart({ data, className }: CalibrationChartProps) {
               dataKey="x"
               domain={[0, 1]}
               ticks={[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]}
-              tick={(props: any) => {
+              tick={(props: { x?: number; y?: number; payload: { value: number } }) => {
                 const { x, y, payload } = props
                 const pctVal = Math.round(payload.value * 100)
                 const count = countByX.get(pctVal)
@@ -188,7 +188,7 @@ export function CalibrationChart({ data, className }: CalibrationChartProps) {
             <Scatter
               data={diagonalData}
               fill="transparent"
-              shape={(props: any) => {
+              shape={(props: { cx?: number; cy?: number; payload: { x: number } }) => {
                 if (props.cx && props.cy) {
                   diagonalPixels.current.set(props.payload.x, props.cy)
                 }
@@ -199,7 +199,7 @@ export function CalibrationChart({ data, className }: CalibrationChartProps) {
             <Scatter
               data={data}
               fill="transparent"
-              shape={(props: any) => {
+              shape={(props: { cx?: number; cy?: number; payload: { x: number; y: number } }) => {
                 const { cx, cy, payload } = props
                 if (!cx || !cy) return null
 
