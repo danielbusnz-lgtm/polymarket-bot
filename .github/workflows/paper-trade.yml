@@ -38,8 +38,9 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           # News context
           TAVILY_API_KEY: ${{ secrets.TAVILY }}
-          # Turso (signals + bot DBs share one auth token)
-          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          # Turso — separate auth token per DB
+          TURSO_SIGNALS_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          TURSO_BOT_AUTH_TOKEN: ${{ secrets.TURSO_BOT_TOKEN }}
           TURSO_SIGNALS_DATABASE_URL: libsql://signum-danielbusnz-lgtm.aws-us-east-1.turso.io
           TURSO_BOT_DATABASE_URL: libsql://signum-bot-danielbusnz-lgtm.aws-us-east-1.turso.io
         run: uv run python paper_trade.py run

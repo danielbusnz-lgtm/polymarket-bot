@@ -92,8 +92,7 @@ class _Connection:
         return getattr(self._conn, name)
 
 
-def _connect(local_path: str, remote_url: str | None) -> Any:
-    token = os.getenv("TURSO_AUTH_TOKEN")
+def _connect(local_path: str, remote_url: str | None, token: str | None) -> Any:
     if remote_url and token:
         import libsql
         return _Connection(libsql.connect(database=remote_url, auth_token=token))
@@ -103,8 +102,16 @@ def _connect(local_path: str, remote_url: str | None) -> Any:
 
 
 def connect_signals(local_path: str) -> Any:
-    return _connect(local_path, os.getenv("TURSO_SIGNALS_DATABASE_URL"))
+    return _connect(
+        local_path,
+        os.getenv("TURSO_SIGNALS_DATABASE_URL"),
+        os.getenv("TURSO_SIGNALS_AUTH_TOKEN") or os.getenv("TURSO_AUTH_TOKEN"),
+    )
 
 
 def connect_bot(local_path: str) -> Any:
-    return _connect(local_path, os.getenv("TURSO_BOT_DATABASE_URL"))
+    return _connect(
+        local_path,
+        os.getenv("TURSO_BOT_DATABASE_URL"),
+        os.getenv("TURSO_BOT_AUTH_TOKEN") or os.getenv("TURSO_AUTH_TOKEN"),
+    )
