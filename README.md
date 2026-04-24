@@ -158,13 +158,6 @@ cd web && pnpm dev
 
 Open `http://localhost:3000`. The dashboard shows an equity curve, open positions with live prices, KPI strip (win rate, Sharpe, drawdown), and an analytics page with calibration charts and model health.
 
-### Cron Automation
-
-```bash
-# Run every 6 hours
-0 */6 * * * cd /path/to/signum && bash run_paper_trade.sh >> logs/paper_trade.log 2>&1
-```
-
 ### GitHub Actions (Turso)
 
 The pipeline can also run on a schedule via GitHub Actions, with state persisted to [Turso](https://turso.tech) (remote SQLite). See `.github/workflows/paper-trade.yml`.
@@ -242,7 +235,6 @@ POLYMARKET_PASSPHRASE=your_passphrase
 │   ├── components/dashboard/    # Equity curve, positions, charts
 │   └── lib/                     # API client, hooks, metrics
 ├── diagrams/                    # Architecture diagrams
-├── run_paper_trade.sh           # Cron runner script
 └── .env.example
 ```
 

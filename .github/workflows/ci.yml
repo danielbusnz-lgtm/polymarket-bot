@@ -19,10 +19,13 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --dev
 
       - name: Compile-check all Python sources
         run: uv run python -m compileall -q python
+
+      - name: Run tests
+        run: uv run pytest python/tests/ -v
 
   web:
     name: Web

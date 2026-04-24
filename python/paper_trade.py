@@ -50,7 +50,9 @@ def init_db() -> None:
                 fill_price    REAL,
                 resolved      INTEGER DEFAULT 0,
                 outcome       TEXT,
-                correct       INTEGER
+                correct       INTEGER,
+                trade_size    REAL,
+                realized_pnl  REAL
             )
         """)
         conn.commit()
@@ -60,10 +62,12 @@ def init_db() -> None:
 def _migrate_signals(conn: sqlite3.Connection) -> None:
     existing = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
     migrations = {
-        "token_id":   "ALTER TABLE signals ADD COLUMN token_id  TEXT NOT NULL DEFAULT ''",
-        "live":       "ALTER TABLE signals ADD COLUMN live       INTEGER DEFAULT 0",
-        "order_id":   "ALTER TABLE signals ADD COLUMN order_id  TEXT",
-        "fill_price": "ALTER TABLE signals ADD COLUMN fill_price REAL",
+        "token_id":     "ALTER TABLE signals ADD COLUMN token_id     TEXT NOT NULL DEFAULT ''",
+        "live":         "ALTER TABLE signals ADD COLUMN live         INTEGER DEFAULT 0",
+        "order_id":     "ALTER TABLE signals ADD COLUMN order_id     TEXT",
+        "fill_price":   "ALTER TABLE signals ADD COLUMN fill_price   REAL",
+        "trade_size":   "ALTER TABLE signals ADD COLUMN trade_size   REAL",
+        "realized_pnl": "ALTER TABLE signals ADD COLUMN realized_pnl REAL",
     }
     for col, sql in migrations.items():
         if col not in existing:
@@ -134,13 +138,13 @@ def _migrate_positions(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
-def log_signal(signal: dict) -> int:
+def log_signal(signal: dict, trade_size: float) -> int:
     run_at = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
         cur = conn.execute("""
             INSERT INTO signals
-                (run_at, market_id, question, direction, token_id, price, edge, avg_prob, disagreement)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (run_at, market_id, question, direction, token_id, price, edge, avg_prob, disagreement, trade_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_at,
             signal["market_id"],
@@ -151,6 +155,7 @@ def log_signal(signal: dict) -> int:
             signal["edge"],
             signal["avg_prob"],
             signal["disagreement"],
+            trade_size,
         ))
         conn.commit()
         return cur.lastrowid
@@ -167,21 +172,43 @@ def mark_live(signal_id: int, order_id: str, fill_price: float | None = None) ->
 
 def resolve_signal(signal_id: int, outcome: str) -> None:
     with get_conn() as conn:
-        row = conn.execute("SELECT direction FROM signals WHERE id = ?", (signal_id,)).fetchone()
+        row = conn.execute(
+            "SELECT direction, price, trade_size FROM signals WHERE id = ?", (signal_id,),
+        ).fetchone()
         if not row:
             print(f"Signal {signal_id} not found.")
             return
         correct = 1 if row["direction"] == outcome else 0
+        size = row["trade_size"] if row["trade_size"] is not None else TRADE_SIZE
+        price = row["price"] or 0
+        if correct and price > 0:
+            pnl = size * (1.0 / price) - size
+        else:
+            pnl = -size
         conn.execute("""
-            UPDATE signals SET resolved = 1, outcome = ?, correct = ? WHERE id = ?
-        """, (outcome, correct, signal_id))
+            UPDATE signals SET resolved = 1, outcome = ?, correct = ?, realized_pnl = ? WHERE id = ?
+        """, (outcome, correct, round(pnl, 2), signal_id))
         conn.commit()
-    print(f"  Signal {signal_id}: direction={row['direction']} outcome={outcome} -> {'WIN' if correct else 'LOSS'}")
+    print(f"  Signal {signal_id}: direction={row['direction']} outcome={outcome} -> {'WIN' if correct else 'LOSS'}  pnl=${pnl:+.2f}")
 
 
 # ---------------------------------------------------------------------------
 # Position tracking (bot.db)
 # ---------------------------------------------------------------------------
+
+
+def position_size(signal: dict) -> float:
+    # Kelly fraction f = (q - p) / (1 - p), capped at TRADE_SIZE.
+    p = signal["price"]
+    q = signal["avg_prob"]
+    if p <= 0 or p >= 1 or q <= p:
+        return 0.0
+    kelly = (q - p) / (1.0 - p)
+    return round(min(TRADE_SIZE, TRADE_SIZE * kelly), 2)
+
+
+def _question_stem(question: str) -> str:
+    return question[:30].strip().lower()
 
 
 def has_open_position(market_id: str, direction: str) -> bool:
@@ -193,7 +220,18 @@ def has_open_position(market_id: str, direction: str) -> bool:
     return row is not None
 
 
-def write_position(signal: dict, is_paper: bool) -> None:
+def has_correlated_position(question: str, direction: str) -> bool:
+    # Block trades whose question shares a prefix with an open position in the same direction.
+    stem = _question_stem(question) + "%"
+    with get_bot_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM positions WHERE LOWER(title) LIKE ? AND direction = ? LIMIT 1",
+            (stem, direction),
+        ).fetchone()
+    return row is not None
+
+
+def write_position(signal: dict, trade_size: float, is_paper: bool) -> None:
     with get_bot_conn() as conn:
         conn.execute("""
             INSERT INTO positions
@@ -203,8 +241,8 @@ def write_position(signal: dict, is_paper: bool) -> None:
         """, (
             signal["question"],
             signal["direction"],
-            TRADE_SIZE,
-            TRADE_SIZE,
+            trade_size,
+            trade_size,
             signal["avg_prob"],
             signal["price"],
             time.time(),
@@ -369,7 +407,7 @@ def _check_resolution(market_id: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def place_order(signal: dict) -> str | None:
+def place_order(signal: dict, trade_size: float) -> str | None:
     from client import get_client
     from py_clob_client.clob_types import OrderArgs
     from py_clob_client.order_builder.constants import BUY
@@ -377,7 +415,7 @@ def place_order(signal: dict) -> str | None:
     client = get_client()
     token_id = signal["token_id"]
     price = signal["price"]
-    size = round(TRADE_SIZE / price, 2)
+    size = round(trade_size / price, 2)
 
     try:
         order_args = OrderArgs(
@@ -419,6 +457,15 @@ def show_report() -> None:
         if resolved > 0:
             print(f"  Win rate      : {wins/resolved:.1%}")
 
+        pnl_row = conn.execute(
+            "SELECT SUM(realized_pnl) AS total, SUM(trade_size) AS staked FROM signals WHERE resolved = 1"
+        ).fetchone()
+        if pnl_row and pnl_row["total"] is not None:
+            total_pnl = pnl_row["total"] or 0.0
+            staked = pnl_row["staked"] or 0.0
+            roi = (total_pnl / staked) if staked else 0.0
+            print(f"  Realized P&L  : ${total_pnl:+.2f}  (staked ${staked:.2f}, ROI {roi:+.1%})")
+
         rows = conn.execute("""
             SELECT
                 CASE
@@ -427,7 +474,8 @@ def show_report() -> None:
                     ELSE               '12-15%'
                 END AS bucket,
                 COUNT(*) AS n,
-                SUM(correct) AS w
+                SUM(correct) AS w,
+                SUM(realized_pnl) AS pnl
             FROM signals
             WHERE resolved = 1
             GROUP BY bucket
@@ -438,7 +486,8 @@ def show_report() -> None:
             print(f"\n  Edge bucket breakdown:")
             for r in rows:
                 wr = r["w"] / r["n"] if r["n"] else 0
-                print(f"    {r['bucket']:10s}  n={r['n']}  win={wr:.1%}")
+                pnl = r["pnl"] or 0.0
+                print(f"    {r['bucket']:10s}  n={r['n']}  win={wr:.1%}  pnl=${pnl:+.2f}")
 
         open_rows = conn.execute("""
             SELECT id, run_at, direction, question, price, edge, live, order_id
@@ -502,22 +551,33 @@ async def run_pipeline(live: bool = False) -> None:
     print(f"{'='*60}")
 
     is_paper = not live
+    seen_stems: set[tuple[str, str]] = set()
+
+    # Take the highest-edge signal first so dedup keeps the strongest trade
+    trades.sort(key=lambda x: x["edge"], reverse=True)
 
     for t in trades:
         if has_open_position(t["market_id"], t["direction"]):
             print(f"\n  SKIP {t['direction']} {t['question'][:70]} — already holding")
             continue
 
-        row_id = log_signal(t)
+        stem_key = (_question_stem(t["question"]), t["direction"])
+        if stem_key in seen_stems or has_correlated_position(t["question"], t["direction"]):
+            print(f"\n  SKIP {t['direction']} {t['question'][:70]} — correlated trade already taken")
+            continue
+        seen_stems.add(stem_key)
+
+        size = position_size(t)
+        row_id = log_signal(t, size)
         print(f"\n  [{row_id}] {t['direction']} {t['question'][:70]}")
-        print(f"       Price: {t['price']:.2f}  Edge: {t['edge']:.2f}  Avg prob: {t['avg_prob']:.2f}")
+        print(f"       Price: {t['price']:.2f}  Edge: {t['edge']:.2f}  Avg prob: {t['avg_prob']:.2f}  Size: ${size:.2f}")
 
         # Write position to bot.db
-        write_position(t, is_paper)
+        write_position(t, size, is_paper)
 
         # Place real order if live
         if live:
-            order_id = place_order(t)
+            order_id = place_order(t, size)
             if order_id:
                 mark_live(row_id, order_id)
 

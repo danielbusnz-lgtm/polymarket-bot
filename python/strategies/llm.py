@@ -4,6 +4,15 @@ import asyncio
 from dotenv import load_dotenv
 
 from pydantic import BaseModel
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+# Retry transient errors (429s, timeouts, 5xx) up to 3 times.
+# Auth errors will exhaust retries cheaply — safe_call swallows the final raise.
+_llm_retry = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=8),
+    reraise=True,
+)
 
 load_dotenv()
 
@@ -208,6 +217,7 @@ SUPERFORECASTER_PROMPT = (
 )
 
 
+@_llm_retry
 async def call_claude(question: str, news: str) -> float | None:
     if not claude:
         return None
@@ -223,6 +233,7 @@ async def call_claude(question: str, news: str) -> float | None:
     return response.parsed_output.probability
 
 
+@_llm_retry
 async def call_gpt(question: str, news: str) -> float | None:
     if not openai_client:
         return None
@@ -238,6 +249,7 @@ async def call_gpt(question: str, news: str) -> float | None:
     return response.choices[0].message.parsed.probability
 
 
+@_llm_retry
 async def call_gemini(question: str, news: str) -> float | None:
     if not gemini:
         return None
@@ -254,6 +266,7 @@ async def call_gemini(question: str, news: str) -> float | None:
     return await asyncio.to_thread(_call)
 
 
+@_llm_retry
 async def call_grok(question: str, news: str) -> float | None:
     if not grok_client:
         return None
@@ -269,6 +282,7 @@ async def call_grok(question: str, news: str) -> float | None:
     return response.choices[0].message.parsed.probability
 
 
+@_llm_retry
 async def call_deepseek(question: str, news: str) -> float | None:
     if not deepseek_client:
         return None

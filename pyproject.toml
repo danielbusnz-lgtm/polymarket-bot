@@ -15,5 +15,11 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "requests>=2.33.0",
     "tavily-python>=0.7.23",
+    "tenacity>=9.0.0",
     "uvicorn>=0.42.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
 ]
