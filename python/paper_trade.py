@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 import requests
 
+import db
 from funnel import fetch_candidates
 from strategies.llm import filter_politics, tier1_screen, tier2_analyze, print_provider_status
 
@@ -27,9 +28,7 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(SIGNALS_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db.connect_signals(SIGNALS_DB_PATH)
 
 
 def init_db() -> None:
@@ -78,9 +77,7 @@ def _migrate_signals(conn: sqlite3.Connection) -> None:
 
 
 def get_bot_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(BOT_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db.connect_bot(BOT_DB_PATH)
 
 
 def init_bot_db() -> None:
@@ -185,6 +182,15 @@ def resolve_signal(signal_id: int, outcome: str) -> None:
 # ---------------------------------------------------------------------------
 # Position tracking (bot.db)
 # ---------------------------------------------------------------------------
+
+
+def has_open_position(market_id: str, direction: str) -> bool:
+    with get_bot_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM positions WHERE market_id = ? AND direction = ? LIMIT 1",
+            (market_id, direction),
+        ).fetchone()
+    return row is not None
 
 
 def write_position(signal: dict, is_paper: bool) -> None:
@@ -498,6 +504,10 @@ async def run_pipeline(live: bool = False) -> None:
     is_paper = not live
 
     for t in trades:
+        if has_open_position(t["market_id"], t["direction"]):
+            print(f"\n  SKIP {t['direction']} {t['question'][:70]} — already holding")
+            continue
+
         row_id = log_signal(t)
         print(f"\n  [{row_id}] {t['direction']} {t['question'][:70]}")
         print(f"       Price: {t['price']:.2f}  Edge: {t['edge']:.2f}  Avg prob: {t['avg_prob']:.2f}")

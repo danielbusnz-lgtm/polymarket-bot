@@ -7,6 +7,8 @@ import httpx
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+import db
+
 BOT_DB_PATH = os.environ.get("BOT_DB_PATH", "bot.db")
 PAPER_TRADES_DB_PATH = os.environ.get("PAPER_TRADES_DB_PATH", "paper_trades.db")
 
@@ -22,13 +24,17 @@ app.add_middleware(
 )
 
 
-def _open_db(path: str) -> sqlite3.Connection | None:
-    uri = f"file:{path}?mode=ro"
+def _open_bot() -> sqlite3.Connection | None:
     try:
-        conn = sqlite3.connect(uri, uri=True)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except sqlite3.OperationalError:
+        return db.connect_bot(BOT_DB_PATH)
+    except Exception:
+        return None
+
+
+def _open_signals() -> sqlite3.Connection | None:
+    try:
+        return db.connect_signals(PAPER_TRADES_DB_PATH)
+    except Exception:
         return None
 
 
@@ -39,7 +45,7 @@ def _rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
 @app.get("/api/snapshots")
 def get_snapshots(mode: str = Query(default="live", pattern="^(live|paper)$")) -> dict:
     is_paper = 1 if mode == "paper" else 0
-    conn = _open_db(BOT_DB_PATH)
+    conn = _open_bot()
     if conn is None:
         return {"mode": mode, "snapshots": []}
     with conn:
@@ -53,7 +59,7 @@ def get_snapshots(mode: str = Query(default="live", pattern="^(live|paper)$")) -
 @app.get("/api/positions")
 def get_positions(mode: str = Query(default="live", pattern="^(live|paper)$")) -> dict:
     is_paper = 1 if mode == "paper" else 0
-    conn = _open_db(BOT_DB_PATH)
+    conn = _open_bot()
     if conn is None:
         return {"mode": mode, "positions": []}
     with conn:
@@ -73,7 +79,7 @@ def get_positions(mode: str = Query(default="live", pattern="^(live|paper)$")) -
 def get_signals(
     status: str = Query(default="open", pattern="^(open|resolved|all)$"),
 ) -> dict:
-    conn = _open_db(PAPER_TRADES_DB_PATH)
+    conn = _open_signals()
     if conn is None:
         return {"status": status, "signals": []}
 
@@ -100,7 +106,7 @@ def get_signals(
 
 @app.get("/api/stats")
 def get_stats() -> dict:
-    conn = _open_db(PAPER_TRADES_DB_PATH)
+    conn = _open_signals()
     empty: dict[str, Any] = {
         "total": 0,
         "open": 0,
@@ -170,7 +176,7 @@ def get_stats() -> dict:
 
 @app.get("/api/cron")
 def get_cron() -> dict:
-    conn = _open_db(BOT_DB_PATH)
+    conn = _open_bot()
     if conn is None:
         return {"last_run": None, "seconds_until_next": None}
     with conn:

@@ -9,6 +9,7 @@ dependencies = [
     "google-genai>=1.68.0",
     "google-generativeai>=0.8.6",
     "httpx>=0.28.1",
+    "libsql>=0.1.11",
     "openai>=2.30.0",
     "py-clob-client>=0.34.6",
     "python-dotenv>=1.2.2",

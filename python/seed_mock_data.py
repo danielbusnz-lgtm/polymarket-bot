@@ -6,6 +6,8 @@ import sqlite3
 import time
 import uuid
 
+import db
+
 random.seed(42)
 
 BOT_DB_PATH = os.environ.get("BOT_DB_PATH", "bot.db")
@@ -46,8 +48,7 @@ def _unix_days_ago(days: float) -> float:
 
 
 def seed_bot_db() -> None:
-    conn = sqlite3.connect(BOT_DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = db.connect_bot(BOT_DB_PATH)
     with conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS portfolio_snapshots (
@@ -136,7 +137,7 @@ def seed_bot_db() -> None:
 
 
 def seed_paper_trades_db() -> None:
-    conn = sqlite3.connect(PAPER_TRADES_DB_PATH)
+    conn = db.connect_signals(PAPER_TRADES_DB_PATH)
     with conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS signals (

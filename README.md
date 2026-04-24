@@ -165,6 +165,32 @@ Open `http://localhost:3000`. The dashboard shows an equity curve, open position
 0 */6 * * * cd /path/to/signum && bash run_paper_trade.sh >> logs/paper_trade.log 2>&1
 ```
 
+### GitHub Actions (Turso)
+
+The pipeline can also run on a schedule via GitHub Actions, with state persisted to [Turso](https://turso.tech) (remote SQLite). See `.github/workflows/paper-trade.yml`.
+
+**Setup:**
+
+1. Create two Turso databases (signals + bot state):
+   ```bash
+   turso db create signum-signals
+   turso db create signum-bot
+   turso db show --url signum-signals  # -> TURSO_SIGNALS_DATABASE_URL
+   turso db show --url signum-bot      # -> TURSO_BOT_DATABASE_URL
+   turso db tokens create signum-signals  # -> TURSO_AUTH_TOKEN (one token works for both DBs in the same group)
+   ```
+
+2. Add these as repo secrets (`Settings > Secrets and variables > Actions`):
+   - `TURSO_AUTH_TOKEN`
+   - `TURSO_SIGNALS_DATABASE_URL`
+   - `TURSO_BOT_DATABASE_URL`
+   - `ANTHROPIC_API_KEY` (required), plus any of `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY` (need >= 2 to satisfy the 3-model minimum with Claude)
+   - `TAVILY_API_KEY`
+
+3. The workflow runs every 6h. Manually trigger with the Run workflow button on the Actions tab.
+
+**Local dev** keeps using the SQLite files (`paper_trades.db`, `bot.db`) when the Turso env vars are unset — no behaviour change.
+
 ## Polymarket Setup
 
 To trade on Polymarket, you need:
