@@ -110,7 +110,7 @@ type EdgeOutcomeBarProps = {
 
 function EdgeOutcomeBar(props: EdgeOutcomeBarProps) {
   const { x, y, width, height, payload, background } = props
-  if (!payload || height === undefined) return null
+  if (!payload || height === undefined || x === undefined || y === undefined || width === undefined) return null
 
   const color = getBarColor(payload.winRate)
   const lowCount = payload.count < 5
@@ -238,8 +238,8 @@ export function EdgeOutcomeChart({ trades, className }: EdgeOutcomeChartProps) {
             />
             <XAxis
               dataKey="label"
-              tick={(props: { x?: number; y?: number; payload: { value: string } }) => {
-                const { x, y, payload: tickPayload } = props
+              tick={(props) => {
+                const { x, y, payload: tickPayload } = props as { x?: number; y?: number; payload: { value: string } }
                 const bucket = buckets.find((b) => b.label === tickPayload.value)
                 return (
                   <g>

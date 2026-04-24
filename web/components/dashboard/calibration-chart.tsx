@@ -118,8 +118,8 @@ export function CalibrationChart({ data, className }: CalibrationChartProps) {
               dataKey="x"
               domain={[0, 1]}
               ticks={[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]}
-              tick={(props: { x?: number; y?: number; payload: { value: number } }) => {
-                const { x, y, payload } = props
+              tick={(props) => {
+                const { x, y, payload } = props as { x?: number; y?: number; payload: { value: number } }
                 const pctVal = Math.round(payload.value * 100)
                 const count = countByX.get(pctVal)
                 return (
@@ -188,9 +188,10 @@ export function CalibrationChart({ data, className }: CalibrationChartProps) {
             <Scatter
               data={diagonalData}
               fill="transparent"
-              shape={(props: { cx?: number; cy?: number; payload: { x: number } }) => {
-                if (props.cx && props.cy) {
-                  diagonalPixels.current.set(props.payload.x, props.cy)
+              shape={(props) => {
+                const p = props as { cx?: number; cy?: number; payload: { x: number } }
+                if (p.cx && p.cy) {
+                  diagonalPixels.current.set(p.payload.x, p.cy)
                 }
                 return <circle cx={0} cy={0} r={0} />
               }}
@@ -199,8 +200,8 @@ export function CalibrationChart({ data, className }: CalibrationChartProps) {
             <Scatter
               data={data}
               fill="transparent"
-              shape={(props: { cx?: number; cy?: number; payload: { x: number; y: number } }) => {
-                const { cx, cy, payload } = props
+              shape={(props) => {
+                const { cx, cy, payload } = props as { cx?: number; cy?: number; payload: { x: number; y: number } }
                 if (!cx || !cy) return null
 
                 const diagY = diagonalPixels.current.get(payload.x)

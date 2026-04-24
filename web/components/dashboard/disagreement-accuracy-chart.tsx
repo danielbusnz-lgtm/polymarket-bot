@@ -90,14 +90,14 @@ type DisagreementBarProps = {
   y?: number
   width?: number
   height?: number
-  payload?: { winRate: number; count: number }
+  payload?: { winRate: number; count: number; ciHalfWidth: number }
   overallWinRate: number
   background?: { x: number; y: number; width: number; height: number }
 }
 
 function DisagreementBar(props: DisagreementBarProps) {
   const { x, y, width, height, payload, overallWinRate, background } = props
-  if (!payload || height === undefined) return null
+  if (!payload || height === undefined || x === undefined || y === undefined || width === undefined) return null
 
   const color = payload.winRate >= overallWinRate ? "#22c55e" : "#F23645"
   const lowCount = payload.count < 5
@@ -231,8 +231,8 @@ export function DisagreementAccuracyChart({
             />
             <XAxis
               dataKey="label"
-              tick={(props: { x?: number; y?: number; payload: { value: string } }) => {
-                const { x, y, payload: tickPayload } = props
+              tick={(props) => {
+                const { x, y, payload: tickPayload } = props as { x?: number; y?: number; payload: { value: string } }
                 const bucket = buckets.find((b) => b.label === tickPayload.value)
                 return (
                   <g>
