@@ -40,6 +40,6 @@ jobs:
           TAVILY_API_KEY: ${{ secrets.TAVILY }}
           # Turso (signals + bot DBs share one auth token)
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          TURSO_SIGNALS_DATABASE_URL: ${{ secrets.TURSO_SIGNALS_DATABASE_URL }}
-          TURSO_BOT_DATABASE_URL: ${{ secrets.TURSO_BOT_DATABASE_URL }}
+          TURSO_SIGNALS_DATABASE_URL: libsql://signum-danielbusnz-lgtm.aws-us-east-1.turso.io
+          TURSO_BOT_DATABASE_URL: libsql://signum-bot-danielbusnz-lgtm.aws-us-east-1.turso.io
         run: uv run python paper_trade.py run
