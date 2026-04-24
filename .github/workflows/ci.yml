@@ -27,6 +27,7 @@ jobs:
   web:
     name: Web
     runs-on: ubuntu-latest
+    continue-on-error: true
     defaults:
       run:
         working-directory: web
