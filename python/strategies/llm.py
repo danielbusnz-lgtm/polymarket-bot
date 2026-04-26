@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 from dotenv import load_dotenv
@@ -70,6 +71,61 @@ MIN_EDGE         = 0.12   # 12% minimum - clears LLM error margin (~8-10% avg)
 MAX_DISAGREEMENT = 0.15   # 15% max disagreement - filters noise, keeps tradeable signals
 TIER1_PICK       = 5      # top 5 markets for deep analysis
 MIN_LLMS         = 3      # minimum LLMs needed for consensus
+
+# Tier 3 guard thresholds — only veto the catastrophic-zone trades.
+GUARD_RAW_PROB   = 0.85   # raw consensus must be >=0.85 to trip the guard
+GUARD_MAX_PRICE  = 0.30   # market YES price must be <0.30 to trip the guard
+
+# Matches "by [Month Day]"/"by [Month Day, Year]"/"by 5/3/26"/"by end of [period]".
+_SHORT_DEADLINE_RE = re.compile(
+    r"\b(?:by|before)\s+("
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,?\s*\d{2,4})?"
+    r"|\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?"
+    r"|end\s+of\s+\w+"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_short_deadline_event_question(question: str) -> bool:
+    """Detects 'will X happen by [date]' phrasing — the failure pattern that
+    bit us on Iran-meeting markets. Long-form election/policy questions
+    don't match."""
+    return bool(_SHORT_DEADLINE_RE.search(question or ""))
+
+
+class _ScheduleConfirmation(BaseModel):
+    confirmed: bool
+    reasoning: str
+
+
+async def has_scheduled_event_in_news(question: str, news: str) -> bool:
+    """Returns True only if the news context contains a *concrete, scheduled*
+    event with a specific date/time that would resolve the question YES.
+
+    Speculation, diplomatic talks-about-talks, or 'sources say' don't count.
+    Conservative on no-info: returns False if news is empty or Claude is
+    unavailable, which means the guard fails closed (skips the trade)."""
+    if not claude or not news.strip():
+        return False
+    response = await claude.messages.parse(
+        model="claude-sonnet-4-6",
+        max_tokens=256,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Question: {question}\n\n"
+                f"News context:\n{news}\n\n"
+                f"Is there a *concrete, publicly announced, scheduled* event with "
+                f"a specific date that would directly resolve this question YES "
+                f"before its deadline? Speculation, ongoing talks, leaks, or "
+                f"'expected to happen' do NOT count — only a confirmed scheduled "
+                f"event does. Answer strictly true or false."
+            ),
+        }],
+        output_format=_ScheduleConfirmation,
+    )
+    return response.parsed_output.confirmed
 
 
 def print_provider_status():
@@ -375,6 +431,18 @@ async def tier2_analyze(market: dict, calibrator=None) -> dict | None:
     if abs(edge) < MIN_EDGE:
         print(f"  -> SKIP (edge {abs(edge):.2f} < {MIN_EDGE})")
         return None
+
+    # Tier 3: veto catastrophic-zone trades on short-deadline event markets
+    # unless news contains a concrete scheduled event. This is the failure
+    # mode that lost both Iran-meeting trades on 2026-04-24.
+    if (raw_avg >= GUARD_RAW_PROB
+            and yes_price < GUARD_MAX_PRICE
+            and is_short_deadline_event_question(question)):
+        confirmed = await has_scheduled_event_in_news(question, news)
+        if not confirmed:
+            print(f"  -> SKIP (short-deadline event with no scheduled-event "
+                  f"confirmation in news context)")
+            return None
 
     direction = "YES" if edge > 0 else "NO"
     print(f"  -> TRADE {direction}  edge={edge:+.2f}")
