@@ -24,7 +24,7 @@ from typing import Any, Callable, Iterable
 from sklearn.isotonic import IsotonicRegression
 
 
-MIN_SAMPLES = 30
+MIN_SAMPLES = 10
 Y_MIN = 0.02
 Y_MAX = 0.98
 DEFAULT_BINS = 10
