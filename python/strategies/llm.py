@@ -96,36 +96,82 @@ def is_short_deadline_event_question(question: str) -> bool:
 
 class _ScheduleConfirmation(BaseModel):
     confirmed: bool
+    evidence_quote: str  # exact text from news, "" if none
+    event_date: str      # specific date/time, "" if none
     reasoning: str
 
 
-async def has_scheduled_event_in_news(question: str, news: str) -> bool:
-    """Returns True only if the news context contains a *concrete, scheduled*
-    event with a specific date/time that would resolve the question YES.
+def _is_confirmed(result: _ScheduleConfirmation) -> bool:
+    """Defense in depth: even if Claude says confirmed=True, require it to
+    quote concrete evidence and name a specific date. Prevents the model
+    from inferring a scheduled event from vague news."""
+    return (
+        result.confirmed
+        and bool(result.evidence_quote.strip())
+        and bool(result.event_date.strip())
+    )
 
-    Speculation, diplomatic talks-about-talks, or 'sources say' don't count.
-    Conservative on no-info: returns False if news is empty or Claude is
-    unavailable, which means the guard fails closed (skips the trade)."""
+
+_GUARD_PROMPT = """\
+You are a strict fact-checker for a trading bot. Your only job is to detect
+whether news context contains a CONCRETE, PUBLICLY CONFIRMED, SCHEDULED event
+that would resolve the prediction question YES before its deadline.
+
+Question: {question}
+
+News context:
+{news}
+
+Output a JSON object with these fields:
+- confirmed: true ONLY if the news directly says the event is scheduled with
+  a specific date on or before the question's deadline. false otherwise.
+- evidence_quote: the EXACT text from the news that confirms it (verbatim, no
+  paraphrase). Empty string if none.
+- event_date: the specific scheduled date/time from the news. Empty string if none.
+- reasoning: one short sentence on why.
+
+DO NOT count any of these as confirmed:
+- "officials are expected to meet"
+- "talks are scheduled to begin" (that is talks, not the event itself)
+- "diplomats said a meeting could happen"
+- "sources say"
+- vague references to "soon", "in coming weeks", "later this month"
+- prior rounds of talks that already happened
+- one side announcing intent without confirmation from the counterparty
+
+ONLY count as confirmed:
+- both parties have publicly announced a specific date for THE event in question
+- there is a press release, official statement, or scheduled diplomatic agenda
+
+When in doubt, set confirmed=false. False positives are far worse than false
+negatives in this context."""
+
+
+async def has_scheduled_event_in_news(question: str, news: str) -> bool:
+    """Returns True only if news contains a *concrete, scheduled* event with
+    a specific date that resolves the question YES. Conservative on no-info:
+    returns False when news is empty or Claude unavailable (guard fails closed,
+    skips the trade)."""
     if not claude or not news.strip():
+        print(f"  [guard] no news / Claude unavailable -> confirmed=False")
         return False
     response = await claude.messages.parse(
         model="claude-sonnet-4-6",
-        max_tokens=256,
+        max_tokens=512,
         messages=[{
             "role": "user",
-            "content": (
-                f"Question: {question}\n\n"
-                f"News context:\n{news}\n\n"
-                f"Is there a *concrete, publicly announced, scheduled* event with "
-                f"a specific date that would directly resolve this question YES "
-                f"before its deadline? Speculation, ongoing talks, leaks, or "
-                f"'expected to happen' do NOT count — only a confirmed scheduled "
-                f"event does. Answer strictly true or false."
-            ),
+            "content": _GUARD_PROMPT.format(question=question, news=news),
         }],
         output_format=_ScheduleConfirmation,
     )
-    return response.parsed_output.confirmed
+    result = response.parsed_output
+    confirmed = _is_confirmed(result)
+    quote_preview = result.evidence_quote[:120].replace("\n", " ") if result.evidence_quote else "(none)"
+    print(f"  [guard] confirmed={confirmed}  date={result.event_date or '(none)'}  "
+          f"quote={quote_preview!r}")
+    if result.reasoning:
+        print(f"  [guard] reasoning: {result.reasoning[:200]}")
+    return confirmed
 
 
 def print_provider_status():

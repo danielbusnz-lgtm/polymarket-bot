@@ -186,3 +186,45 @@ def test_guard_does_not_apply_when_consensus_below_threshold(monkeypatch):
 def test_min_samples_threshold_lowered():
     from calibration import MIN_SAMPLES
     assert MIN_SAMPLES == 10
+
+
+# ---------------------------------------------------------------------------
+# Defense-in-depth: a True from Claude isn't enough on its own
+# ---------------------------------------------------------------------------
+
+
+def _confirmation(confirmed: bool, quote: str = "", date: str = "", reasoning: str = ""):
+    from strategies.llm import _ScheduleConfirmation
+    return _ScheduleConfirmation(
+        confirmed=confirmed, evidence_quote=quote, event_date=date, reasoning=reasoning,
+    )
+
+
+def test_is_confirmed_requires_quote_and_date():
+    from strategies.llm import _is_confirmed
+    # Claude says yes but provides no evidence -> not confirmed
+    assert _is_confirmed(_confirmation(True, quote="", date="May 5")) is False
+    assert _is_confirmed(_confirmation(True, quote="meeting set", date="")) is False
+    assert _is_confirmed(_confirmation(True, quote="   ", date="May 5")) is False
+    # Claude says yes with quote and date -> confirmed
+    assert _is_confirmed(_confirmation(True, quote="meeting set for May 5",
+                                       date="May 5, 2026")) is True
+    # Claude says no -> never confirmed
+    assert _is_confirmed(_confirmation(False, quote="meeting set",
+                                       date="May 5, 2026")) is False
+
+
+def test_no_news_returns_false_without_calling_claude(monkeypatch):
+    """If Tavily failed and news is empty, the guard MUST fail closed."""
+    import asyncio
+    from strategies import llm
+
+    sentinel = {"called": False}
+    async def boom(*_a, **_kw):
+        sentinel["called"] = True
+        raise AssertionError("Claude should not be called when news is empty")
+
+    monkeypatch.setattr(llm, "claude", type("C", (), {"messages": type("M", (), {"parse": boom})()})())
+    result = asyncio.run(llm.has_scheduled_event_in_news("test?", ""))
+    assert result is False
+    assert sentinel["called"] is False
