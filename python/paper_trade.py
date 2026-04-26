@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import requests
 
 import db
+import calibration
 from funnel import fetch_candidates
 from strategies.llm import filter_politics, tier1_screen, tier2_analyze, print_provider_status
 
@@ -68,6 +69,7 @@ def _migrate_signals(conn: sqlite3.Connection) -> None:
         "fill_price":   "ALTER TABLE signals ADD COLUMN fill_price   REAL",
         "trade_size":   "ALTER TABLE signals ADD COLUMN trade_size   REAL",
         "realized_pnl": "ALTER TABLE signals ADD COLUMN realized_pnl REAL",
+        "raw_prob":     "ALTER TABLE signals ADD COLUMN raw_prob     REAL",
     }
     for col, sql in migrations.items():
         if col not in existing:
@@ -143,8 +145,8 @@ def log_signal(signal: dict, trade_size: float) -> int:
     with get_conn() as conn:
         cur = conn.execute("""
             INSERT INTO signals
-                (run_at, market_id, question, direction, token_id, price, edge, avg_prob, disagreement, trade_size)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (run_at, market_id, question, direction, token_id, price, edge, avg_prob, raw_prob, disagreement, trade_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_at,
             signal["market_id"],
@@ -154,6 +156,7 @@ def log_signal(signal: dict, trade_size: float) -> int:
             signal["price"],
             signal["edge"],
             signal["avg_prob"],
+            signal.get("raw_prob"),
             signal["disagreement"],
             trade_size,
         ))
@@ -438,6 +441,20 @@ def place_order(signal: dict, trade_size: float) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def recalibrate() -> None:
+    iso = calibration.fit_and_save(get_conn, get_bot_conn)
+    if iso.is_identity:
+        with get_conn() as conn:
+            n = conn.execute("SELECT COUNT(*) FROM signals WHERE resolved = 1").fetchone()[0]
+        print(f"Not enough resolved signals to fit ({n} found, need {calibration.MIN_SAMPLES}). "
+              f"Calibration left as identity.")
+        return
+    print(f"Fitted isotonic calibration on {iso.n_samples} resolved signals.")
+    print(f"Sample mappings:")
+    for raw in (0.10, 0.30, 0.50, 0.70, 0.90, 0.95):
+        print(f"  raw={raw:.2f}  ->  calibrated={iso.predict(raw):.2f}")
+
+
 def show_report() -> None:
     with get_conn() as conn:
         total    = conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
@@ -499,7 +516,42 @@ def show_report() -> None:
             for r in open_rows:
                 live_tag = f" [LIVE order={r['order_id']}]" if r["live"] else " [paper]"
                 print(f"    [{r['id']}] {r['direction']} | edge={r['edge']:.2f} | price={r['price']:.2f}{live_tag} | {r['question'][:55]}")
-        print()
+
+        # Reliability diagram on raw_prob (un-calibrated) — drives calibration
+        # decisions. Falls back to avg_prob for legacy rows where raw is null.
+        diag_rows = conn.execute("""
+            SELECT COALESCE(raw_prob, avg_prob) AS p, correct
+            FROM signals
+            WHERE resolved = 1 AND COALESCE(raw_prob, avg_prob) IS NOT NULL
+        """).fetchall()
+        if diag_rows:
+            samples = [(float(r["p"]), int(r["correct"])) for r in diag_rows
+                       if r["correct"] is not None]
+            diag = calibration.reliability_diagram(samples, n_bins=10)
+            print(f"\n  Reliability (raw consensus -> outcome, {len(samples)} samples):")
+            print(f"    {'bin':>10s} {'n':>5s} {'mean_p':>8s} {'acc':>6s} {'gap':>7s}")
+            for i in sorted(diag.keys()):
+                b = diag[i]
+                if b["n"] == 0:
+                    continue
+                bin_label = f"{b['bin_low']:.1f}-{b['bin_high']:.1f}"
+                gap = b["mean_pred"] - b["accuracy"]
+                print(f"    {bin_label:>10s} {b['n']:>5d} {b['mean_pred']:>8.2f} "
+                      f"{b['accuracy']:>6.2f} {gap:>+7.2f}")
+
+    with get_bot_conn() as bot_conn:
+        iso = calibration.load_latest(bot_conn)
+    print()
+    if iso.is_identity:
+        print(f"  Calibration: identity (need {calibration.MIN_SAMPLES}+ resolved signals)")
+    else:
+        from datetime import datetime as _dt, timezone as _tz
+        when = _dt.fromtimestamp(iso.fitted_at, _tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+        print(f"  Calibration: fitted on {iso.n_samples} samples ({when})")
+        print(f"    {'raw':>6s} -> {'calibrated':>10s}")
+        for raw in (0.10, 0.30, 0.50, 0.70, 0.90, 0.95):
+            print(f"    {raw:>6.2f} -> {iso.predict(raw):>10.2f}")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -542,8 +594,15 @@ async def run_pipeline(live: bool = False) -> None:
     picks = await tier1_screen(candidates)
     print(f"Tier 1 selected {len(picks)} markets for deep analysis")
 
+    with get_bot_conn() as bot_conn:
+        calibrator = calibration.load_latest(bot_conn)
+    if calibrator.is_identity:
+        print(f"Calibration: identity (need {calibration.MIN_SAMPLES}+ resolved signals; run `recalibrate`)")
+    else:
+        print(f"Calibration: fitted from {calibrator.n_samples} resolved signals")
+
     print("\nRunning Tier 2 analysis...")
-    results = await asyncio.gather(*[tier2_analyze(m) for m in picks])
+    results = await asyncio.gather(*[tier2_analyze(m, calibrator=calibrator) for m in picks])
 
     trades = [r for r in results if r is not None]
     print(f"\n{'='*60}")
@@ -598,6 +657,7 @@ def main():
     run_parser.add_argument("--live", action="store_true", help="Place real orders on Polymarket")
 
     sub.add_parser("report", help="Print calibration report")
+    sub.add_parser("recalibrate", help="Refit isotonic calibration from resolved signals")
 
     res = sub.add_parser("resolve", help="Mark a signal resolved")
     res.add_argument("id",      type=int,              help="Signal ID")
@@ -612,7 +672,12 @@ def main():
         asyncio.run(run_pipeline(live=live))
     elif args.cmd == "report":
         init_db()
+        init_bot_db()
         show_report()
+    elif args.cmd == "recalibrate":
+        init_db()
+        init_bot_db()
+        recalibrate()
     elif args.cmd == "resolve":
         init_db()
         resolve_signal(args.id, args.outcome)

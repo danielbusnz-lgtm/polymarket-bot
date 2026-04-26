@@ -304,7 +304,7 @@ async def call_deepseek(question: str, news: str) -> float | None:
     return ProbResult.model_validate_json(text[start:end]).probability
 
 
-async def tier2_analyze(market: dict) -> dict | None:
+async def tier2_analyze(market: dict, calibrator=None) -> dict | None:
     question  = market["question"]
     yes_price = market["yes_price"]
 
@@ -353,7 +353,8 @@ async def tier2_analyze(market: dict) -> dict | None:
         return None
 
     trimmed      = sorted(probs)[1:-1] if len(probs) >= 5 else probs  # trim only if we have 5
-    avg          = sum(trimmed) / len(trimmed)
+    raw_avg      = sum(trimmed) / len(trimmed)
+    avg          = calibrator.predict(raw_avg) if calibrator is not None else raw_avg
     disagreement = max(probs) - min(probs)
     edge         = avg - yes_price
 
@@ -362,7 +363,10 @@ async def tier2_analyze(market: dict) -> dict | None:
     for name, r in zip(model_names, results):
         parts.append(f"{name}={r:.2f}" if r is not None else f"{name}=FAIL")
     print(f"  {' '.join(parts)}")
-    print(f"  avg={avg:.2f}  market={yes_price:.2f}  edge={edge:+.2f}  disagreement={disagreement:.2f}")
+    if calibrator is not None and not getattr(calibrator, "is_identity", True):
+        print(f"  raw={raw_avg:.2f}  calibrated={avg:.2f}  market={yes_price:.2f}  edge={edge:+.2f}  disagreement={disagreement:.2f}")
+    else:
+        print(f"  avg={avg:.2f}  market={yes_price:.2f}  edge={edge:+.2f}  disagreement={disagreement:.2f}")
 
     if disagreement > MAX_DISAGREEMENT:
         print(f"  -> SKIP (disagreement {disagreement:.2f} > {MAX_DISAGREEMENT})")
@@ -385,5 +389,6 @@ async def tier2_analyze(market: dict) -> dict | None:
         "price":         yes_price if direction == "YES" else market["no_price"],
         "edge":          abs(edge),
         "avg_prob":      avg,
+        "raw_prob":      raw_avg,
         "disagreement":  disagreement,
     }

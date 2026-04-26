@@ -133,7 +133,16 @@ python paper_trade.py report
 
 # Mark a signal as resolved
 python paper_trade.py resolve <id> YES
+
+# Refit isotonic calibration from resolved signals (need 30+ resolved)
+python paper_trade.py recalibrate
 ```
+
+The `recalibrate` step fits an isotonic regression on `(raw_consensus, outcome)`
+pairs and persists it to `bot.db`. On every subsequent `run`, raw LLM consensus
+probabilities are mapped through this calibrator before edge is computed —
+fixing the systematic overconfidence frontier LLMs exhibit at the high tail
+(see KalshiBench, arXiv:2512.16030). Re-run periodically as more trades resolve.
 
 ### Live Trading
 
