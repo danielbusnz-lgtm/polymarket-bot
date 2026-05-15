@@ -1,37 +1,9 @@
-# Secrets
 .env
-
-# Strategy
-PLAN.md
-
-# Python
-venv/
+.venv/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.Python
-
-# Rust
-rust/target/
-
-# Database
 *.db
-*.sqlite
-
-# Logs
-*.log
-
-# IDE
-.vscode/
-.idea/
-
-# Node
+.DS_Store
 node_modules/
-
-# UV / Python tooling
-.python-version
-uv.lock
-
-# Misc
-.playwright-mcp/
+target/
+dist/
