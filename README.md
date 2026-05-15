@@ -7,7 +7,6 @@
 
 Autonomous prediction market trading on Polymarket. Uses multi-LLM consensus to find mispriced markets and executes orders via the Polymarket CLOB API.
 
-**Paper trading: 6,841 signals logged, 65% win rate on resolved trades.**
 
 
 ## Installation
