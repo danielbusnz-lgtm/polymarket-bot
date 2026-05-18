@@ -1,0 +1,17 @@
+# Fly app config — Stockholm region so requests originate from a Sweden IP,
+# which Polymarket's CLOB doesn't geoblock. Dublin (closest to Polymarket's
+# London servers) isn't available on Fly's region list for this account;
+# Stockholm is the next-closest non-blocked European option (~25-35ms to LHR).
+#
+# This isn't a long-running service: we boot a machine, run trade.py, exit.
+# Use `flyctl machine run` for one-shots, or `flyctl ssh console` to poke at it.
+
+app = "signum-bot"
+primary_region = "arn"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[vm]
+  size = "shared-cpu-1x"   # cheapest tier — bot is mostly waiting on HTTP
+  memory = "256mb"
