@@ -24,10 +24,10 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        # Same as the Dockerfile + extras the tests need. No anthropic key
-        # needed since these tests don't call Claude — they hit Polymarket
-        # Gamma (read-only, no auth) and a local SQLite tempfile.
-        run: pip install --no-cache-dir httpx anthropic python-dotenv
+        # No anthropic key needed since these tests don't call Claude —
+        # they hit Polymarket Gamma (read-only, no auth) and a local
+        # SQLite tempfile.
+        run: pip install --no-cache-dir -r requirements.txt
 
       - name: Initialize schema (smoke-test of ledger.py)
         run: python ledger.py
