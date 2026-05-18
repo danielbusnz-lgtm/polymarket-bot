@@ -243,8 +243,15 @@ def _extract_confidence(text: str) -> str:
 PROMPT_VERSION = "v2-deep-research"
 
 
+# Hours within which we consider a market "recently scanned" and skip it.
+# Override per-run via the env var, e.g.:
+#   RESCAN_TTL_HOURS=4 python analyst.py   # aggressive trading
+#   RESCAN_TTL_HOURS=168 python analyst.py # weekly budget mode
+RESCAN_TTL_HOURS = float(os.environ.get("RESCAN_TTL_HOURS", 24))
+
+
 def main() -> None:
-    """Pick one filtered candidate, run deep research, persist to ledger."""
+    """Pick one filtered + unscanned candidate, run deep research, persist."""
     from filters import fetch_and_screen
     import repo
 
@@ -253,7 +260,20 @@ def main() -> None:
         print("no candidates passed the filter pipeline")
         return
 
-    market = max(candidates, key=lambda m: m.volume_24hr)
+    # Skip anything we've already predicted on within the rescan window.
+    # Saves ~$0.28 per skip on Sonnet 4.6 settings.
+    already_scanned = repo.market_ids_predicted_recently(within_hours=RESCAN_TTL_HOURS)
+    unscanned = [m for m in candidates if m.id not in already_scanned]
+    print(
+        f"{len(candidates)} candidates, "
+        f"{len(unscanned)} unscanned in last {RESCAN_TTL_HOURS}h "
+        f"(skipping {len(candidates) - len(unscanned)} already-predicted)"
+    )
+    if not unscanned:
+        print("nothing new to scan — everything's been predicted recently")
+        return
+
+    market = max(unscanned, key=lambda m: m.volume_24hr)
     yes_price = market.outcome_prices[0]
     print(f"=== {market.question} ===\n")
     print(f"market 'Yes' : {yes_price:.4f}  ({yes_price * 100:.2f}%)")

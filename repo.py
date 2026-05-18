@@ -9,7 +9,7 @@ helpers are for things the trading loop hits every cycle.
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ledger import connect
 from market import Market
@@ -134,6 +134,26 @@ def record_prediction(
                 ),
             )
             return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def market_ids_predicted_recently(within_hours: float = 24.0) -> set[str]:
+    """Set of market_ids that have a prediction newer than `within_hours`.
+
+    Used by the trading loop to skip re-scanning markets we already spent
+    Claude tokens on. Pass `within_hours=4` for an aggressive trading loop,
+    or `within_hours=24*7` to only re-scan weekly.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=within_hours)
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT market_id FROM predictions "
+            "WHERE predicted_at >= ?",
+            (cutoff.isoformat(),),
+        ).fetchall()
+        return {r["market_id"] for r in rows}
     finally:
         conn.close()
 
