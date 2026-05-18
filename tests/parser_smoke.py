@@ -9,6 +9,12 @@ Run this whenever the Market schema changes to catch real-world edge
 cases before they crash production.
 """
 
+import sys
+from pathlib import Path
+
+# Source modules live at the project root, one level up from tests/.
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import random
 import time
 from collections import Counter

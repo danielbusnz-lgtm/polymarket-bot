@@ -4,14 +4,18 @@ Spins up a fresh test database in a temp file, fetches one live market
 from Polymarket Gamma, then exercises every repo function and verifies
 the writes/reads behave correctly. Cleans up the temp DB on exit.
 
-Run: .venv/bin/python test_repo.py
+Run: .venv/bin/python tests/test_repo.py
 
 Plain assertions, no pytest. Each step prints what passed so the trace
 itself is the diagnostic.
 """
 
+import sys
 import tempfile
 from pathlib import Path
+
+# Source modules live at the project root, one level up from tests/.
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Swap the database path BEFORE importing repo, so all of repo's calls go
 # to our test DB. ledger.connect() reads DEFAULT_DB_PATH at call time
