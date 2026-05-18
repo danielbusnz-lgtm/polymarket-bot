@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Also let us run it manually from the Actions tab when we want to.
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install dependencies
+        # Same as the Dockerfile + extras the tests need. No anthropic key
+        # needed since these tests don't call Claude — they hit Polymarket
+        # Gamma (read-only, no auth) and a local SQLite tempfile.
+        run: pip install --no-cache-dir httpx anthropic python-dotenv
+
+      - name: Initialize schema (smoke-test of ledger.py)
+        run: python ledger.py
+
+      - name: Repo integration tests (against real Polymarket data)
+        run: python tests/test_repo.py
+
+      - name: Parser regression smoke tests
+        run: python tests/parser_smoke.py

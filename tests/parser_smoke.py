@@ -136,6 +136,12 @@ def main() -> None:
         for n in notes[:20]:
             print(f"  {n}")
 
+    # CI exit code: hard-fail only on parse errors. Notes (edge cases like
+    # neg_risk markets or pre-pricing 'Up or Down' markets) are informational
+    # and don't break the build.
+    if failures:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
