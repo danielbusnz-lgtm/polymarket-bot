@@ -27,7 +27,9 @@ jobs:
         # No anthropic key needed since these tests don't call Claude —
         # they hit Polymarket Gamma (read-only, no auth) and a local
         # SQLite tempfile.
-        run: pip install --no-cache-dir -r requirements.txt
+        # Let pip populate ~/.cache/pip so setup-python's cache step can
+        # save it. --no-cache-dir defeats the cache: pip config above.
+        run: pip install -r requirements.txt
 
       - name: Initialize schema (smoke-test of ledger.py)
         run: python ledger.py
